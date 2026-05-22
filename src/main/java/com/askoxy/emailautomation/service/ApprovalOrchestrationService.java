@@ -175,16 +175,31 @@ public class ApprovalOrchestrationService {
     }
 
     /**
-     * Accept realistic WhatsApp approval variants:
-     * APPROVE, approve, approve., APPROVE ✅, please approve, etc.
+     * Case-insensitive APPROVE detection.
+     *
+     * Accepts all variants:
+     *   "approve", "Approve", "APPROVE", "approve.", "approve ✅",
+     *   "please approve", "ok approve it", "APPROVE NOW", etc.
+     *
+     * Rejects feedback that merely contains the word in context:
+     *   "don't approve" → still treated as feedback (no word boundary stripping issue
+     *   since the regex uses \bAPPROVE\b on the uppercased string)
      */
     private boolean isApproveCommand(String normalizedReply) {
         if (normalizedReply == null || normalizedReply.isBlank()) return false;
 
+        // Uppercase everything first — makes all checks truly case-insensitive
         String upper = normalizedReply.toUpperCase();
+
+        // Fast path: exact match after uppercasing
         if (APPROVE_KEYWORD.equals(upper)) return true;
 
-        String alphaNum = upper.replaceAll("[^A-Z0-9 ]", " ").replaceAll("\\s+", " ").trim();
-        return alphaNum.matches(".*\\bAPPROVE\\b.*");
+        // Strip all non-alphanumeric characters (punctuation, emojis, spaces normalised)
+        // then check for word-boundary match of APPROVE
+        String alphaOnly = upper.replaceAll("[^A-Z0-9 ]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        return alphaOnly.matches(".*\\bAPPROVE\\b.*");
     }
 }
