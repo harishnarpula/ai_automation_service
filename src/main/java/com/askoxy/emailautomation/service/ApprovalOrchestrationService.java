@@ -1,13 +1,19 @@
 package com.askoxy.emailautomation.service;
 
+import com.askoxy.emailautomation.config.MultiSenderConfig;
 import com.askoxy.emailautomation.dto.GeneratedEmailDto;
+import com.askoxy.emailautomation.entity.CampaignClient;
 import com.askoxy.emailautomation.entity.EmailApprovalSession;
+import com.askoxy.emailautomation.repository.CampaignClientRepository;
 import com.askoxy.emailautomation.repository.EmailApprovalSessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -17,18 +23,17 @@ public class ApprovalOrchestrationService {
     private static final String APPROVE_KEYWORD = "APPROVE";
 
     private final EmailApprovalSessionRepository sessionRepository;
+    private final CampaignClientRepository campaignClientRepository;
     private final RegenerationService regenerationService;
     private final EmailDeliveryService emailDeliveryService;
     private final WhatsAppNotificationService whatsAppNotificationService;
+    private final MultiSenderConfig multiSenderConfig;
 
-    @Value("${spring.ai.openai.api-key}")
-    private String openAiKey;
+    // ── Entry point: admin WhatsApp reply ─────────────────────────────────────
 
     /**
      * Called by WhatsAppWebhookController when admin sends any WhatsApp reply.
-     *
-     * Handles both CAMPAIGN and CLIENT_REPLY sessions transparently.
-     * The most recent PENDING_APPROVAL session is always the active one.
+     * Routes to the correct handler based on session_type.
      */
     @Transactional
     public void processAdminReply(String replyText) {
@@ -44,30 +49,34 @@ public class ApprovalOrchestrationService {
             return;
         }
 
-        // Race condition guard — webhook + polling both firing
         if (isTerminalStatus(session.getStatus())) {
-            log.warn("[Approval] Session {} is already in terminal state={}. Ignoring duplicate reply.",
+            log.warn("[Approval] Session {} is already terminal={}. Ignoring duplicate reply.",
                     session.getSessionId(), session.getStatus());
             return;
         }
 
         log.info("[Approval] Processing admin reply for sessionId={} sessionType={} status={}",
                 session.getSessionId(), session.getSessionType(), session.getStatus());
-
-        log.info("[Approval] Admin rawReply='{}' normalizedReply='{}'", replyText, normalizedReply);
+        log.info("[Approval] Admin rawReply='{}' normalized='{}'", replyText, normalizedReply);
 
         if (isApproveCommand(normalizedReply)) {
-            handleApproval(session);
+            // ── Route to correct approval handler ─────────────────────────────
+            if ("BULK_CAMPAIGN".equals(session.getSessionType())) {
+                handleBulkApproval(session);
+            } else {
+                handleApproval(session);
+            }
         } else {
             handleRejection(session, normalizedReply);
         }
     }
 
+    // ── Single-client approval (CAMPAIGN / CLIENT_REPLY — unchanged) ──────────
+
     private void handleApproval(EmailApprovalSession session) {
         log.info("[Approval] APPROVED — sessionId={} sessionType={} attempt={}",
                 session.getSessionId(), session.getSessionType(), session.getAttemptCount());
 
-        // Move to terminal state FIRST — prevents double-send from race conditions
         session.setStatus("APPROVED");
         sessionRepository.save(session);
 
@@ -80,7 +89,7 @@ public class ApprovalOrchestrationService {
             String inReplyTo = null;
             String references = null;
             if ("CLIENT_REPLY".equals(session.getSessionType())) {
-                inReplyTo = session.getEmailThreadId();
+                inReplyTo  = session.getEmailThreadId();
                 references = session.getEmailThreadId();
             }
 
@@ -93,12 +102,10 @@ public class ApprovalOrchestrationService {
             sessionRepository.save(session);
 
             whatsAppNotificationService.sendDeliveryConfirmation(session);
-
-            log.info("[Approval] Email delivered to client={} sessionType={}",
-                    session.getClientEmail(), session.getSessionType());
+            log.info("[Approval] Email delivered to client={}", session.getClientEmail());
 
         } catch (Exception e) {
-            log.error("[Approval] Email delivery failed for session={}, reverting to PENDING_APPROVAL",
+            log.error("[Approval] Delivery failed for session={}, reverting to PENDING_APPROVAL",
                     session.getSessionId(), e);
             session.setStatus("PENDING_APPROVAL");
             sessionRepository.save(session);
@@ -106,16 +113,117 @@ public class ApprovalOrchestrationService {
         }
     }
 
-    private void handleRejection(EmailApprovalSession session, String feedback) {
-        log.info("[Rejection] START — sessionId={} sessionType={} attempt={} feedback='{}'",
-                session.getSessionId(), session.getSessionType(), session.getAttemptCount(), feedback);
+    // ── Bulk approval (BULK_CAMPAIGN) — NEW ───────────────────────────────────
 
-        log.info("[Rejection] Current subject='{}'", session.getCurrentSubject());
-        log.info("[Rejection] Current body (first 200 chars)='{}'",
-                session.getCurrentBody() != null
-                        ? session.getCurrentBody().substring(0, Math.min(200, session.getCurrentBody().length()))
-                        : "NULL");
-        log.info("[Rejection] Accumulated feedback so far='{}'", session.getAccumulatedFeedback());
+    /**
+     * Admin approved the bulk campaign preview.
+     * Loops through all PENDING clients, personalizes the email header per client,
+     * picks the assigned sender's JavaMailSender, and sends.
+     *
+     * A 1-second delay between sends avoids Gmail rate limits.
+     * SENT/FAILED status is updated per client in the campaign_clients table.
+     * A WhatsApp summary is sent at the end.
+     */
+    private void handleBulkApproval(EmailApprovalSession session) {
+        log.info("[BulkApproval] APPROVED — sessionId={} campaignId={}",
+                session.getSessionId(), session.getEmailThreadId()); // emailThreadId stores campaignId
+
+        // Lock the session immediately to prevent double-send
+        session.setStatus("APPROVED");
+        sessionRepository.save(session);
+
+        String campaignId = session.getEmailThreadId(); // re-used field for campaignId
+        if (campaignId == null || campaignId.isBlank()) {
+            log.error("[BulkApproval] Missing campaignId on sessionId={}. Marking as REGENERATION_FAILED.",
+                    session.getSessionId());
+            session.setStatus("REGENERATION_FAILED");
+            sessionRepository.save(session);
+            whatsAppNotificationService.sendRegenerationFailureAlert(
+                    session, "Missing campaignId for bulk campaign session");
+            return;
+        }
+        String subjectTemplate = session.getCurrentSubject();
+        String bodyTemplate    = session.getCurrentBody();
+
+        List<CampaignClient> pendingClients = campaignClientRepository
+                .findByCampaignIdAndStatus(campaignId, "PENDING");
+
+        if (pendingClients.isEmpty()) {
+            log.warn("[BulkApproval] No PENDING clients found for campaignId={}. Already sent?", campaignId);
+            whatsAppNotificationService.sendBulkCampaignSummary(campaignId, 0, 0,
+                    List.of("No PENDING clients found — already sent?"));
+            return;
+        }
+
+        log.info("[BulkApproval] Sending to {} clients for campaignId={}", pendingClients.size(), campaignId);
+
+        int sentCount   = 0;
+        int failedCount = 0;
+        java.util.ArrayList<String> failedEmails = new java.util.ArrayList<>();
+
+        for (CampaignClient client : pendingClients) {
+            try {
+                // ── 1. Personalize subject and body ───────────────────────────
+                String personalizedSubject = personalize(subjectTemplate, client);
+                String personalizedBody    = personalize(bodyTemplate,    client);
+
+                GeneratedEmailDto personalizedEmail = GeneratedEmailDto.builder()
+                        .subject(personalizedSubject)
+                        .body(personalizedBody)
+                        .build();
+
+                // ── 2. Pick the sender assigned to this client ────────────────
+                String senderEmail = client.getAssignedSender();
+                String senderName  = multiSenderConfig.getSenderName(senderEmail);
+                JavaMailSender sender = multiSenderConfig.getSenderFor(senderEmail);
+
+                log.info("[BulkApproval] Sending to={} from={} ({})",
+                        client.getClientEmail(), senderEmail, senderName);
+
+                // ── 3. Send ───────────────────────────────────────────────────
+                String sentMessageId = emailDeliveryService.send(
+                        sender, senderEmail, senderName,
+                        client.getClientEmail(), personalizedEmail);
+
+                // ── 4. Mark SENT ──────────────────────────────────────────────
+                client.setStatus("SENT");
+                client.setSentMessageId(sentMessageId);
+                client.setSentAt(LocalDateTime.now());
+                campaignClientRepository.save(client);
+                sentCount++;
+
+                log.info("[BulkApproval] ✅ Sent to={} messageId={}", client.getClientEmail(), sentMessageId);
+
+                // ── 5. Rate limit buffer ──────────────────────────────────────
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Bulk send interrupted", ie);
+                }
+
+            } catch (Exception e) {
+                log.error("[BulkApproval] ❌ Failed for client={}: {}",
+                        client.getClientEmail(), e.getMessage(), e);
+                client.setStatus("FAILED");
+                client.setErrorMessage(e.getMessage());
+                campaignClientRepository.save(client);
+                failedCount++;
+                failedEmails.add(client.getClientEmail());
+            }
+        }
+
+        // ── 6. Send WhatsApp summary ──────────────────────────────────────────
+        log.info("[BulkApproval] Campaign complete. sent={} failed={}", sentCount, failedCount);
+        whatsAppNotificationService.sendBulkCampaignSummary(
+                campaignId, sentCount, failedCount, failedEmails);
+    }
+
+    // ── Rejection / regeneration (CAMPAIGN + CLIENT_REPLY + BULK_CAMPAIGN) ────
+
+    private void handleRejection(EmailApprovalSession session, String feedback) {
+        log.info("[Approval] REJECTED — sessionId={} sessionType={} attempt={} feedback={}",
+                session.getSessionId(), session.getSessionType(), session.getAttemptCount(), feedback);
 
         session.setAccumulatedFeedback(
                 accumulateFeedback(session.getAccumulatedFeedback(), session.getAttemptCount(), feedback));
@@ -123,19 +231,8 @@ public class ApprovalOrchestrationService {
         session.setAttemptCount(session.getAttemptCount() + 1);
         sessionRepository.save(session);
 
-        log.info("[Rejection] Session saved as REGENERATING — now calling RegenerationService.regenerate()");
-
         try {
-
-            log.info("[Regeneration] ENTRY — sessionId={} attemptCount={} fileId='{}'",
-                    session.getSessionId(), session.getAttemptCount(), session.getFileId());
-            log.info("[Regeneration] OpenAI key resolved (first 7 chars)='{}'",
-                    openAiKey != null && openAiKey.length() > 7 ? openAiKey.substring(0, 7) : "TOO_SHORT_OR_NULL");
-            log.info("[Regeneration] Accumulated feedback='{}'", session.getAccumulatedFeedback());
             GeneratedEmailDto revised = regenerationService.regenerate(session);
-
-            log.info("[Rejection] Regeneration SUCCESS — new subject='{}'", revised.getSubject());
-
             session.setCurrentSubject(revised.getSubject());
             session.setCurrentBody(revised.getBody());
             session.setStatus("PENDING_APPROVAL");
@@ -143,31 +240,25 @@ public class ApprovalOrchestrationService {
 
             if ("CLIENT_REPLY".equals(session.getSessionType())) {
                 whatsAppNotificationService.sendReplyForApproval(session);
+            } else if ("BULK_CAMPAIGN".equals(session.getSessionType())) {
+                // Re-send the bulk preview with the revised template
+                whatsAppNotificationService.sendBulkForApproval(session);
             } else {
                 whatsAppNotificationService.sendForApproval(session);
             }
 
         } catch (Exception e) {
-            log.error("[Rejection] Regeneration FAILED — sessionId={} exceptionClass={} message='{}'",
-                    session.getSessionId(), e.getClass().getName(), e.getMessage());
-            log.error("[Rejection] Full stack trace:", e);
-
-            // Dig into root cause — Spring AI wraps OpenAI errors
-            Throwable cause = e.getCause();
-            while (cause != null) {
-                log.error("[Rejection] Caused by: exceptionClass={} message='{}'",
-                        cause.getClass().getName(), cause.getMessage());
-                cause = cause.getCause();
-            }
-
+            log.error("[Approval] Regeneration failed for session={}", session.getSessionId(), e);
             session.setStatus("REGENERATION_FAILED");
             sessionRepository.save(session);
             whatsAppNotificationService.sendRegenerationFailureAlert(session, e.getMessage());
         }
     }
 
+    // ── Session initiators ────────────────────────────────────────────────────
+
     /**
-     * Called by EmailAutomationService to start a new CAMPAIGN approval session.
+     * Existing: single-client CAMPAIGN session.
      */
     @Transactional
     public EmailApprovalSession initiateApprovalSession(GeneratedEmailDto email,
@@ -191,6 +282,62 @@ public class ApprovalOrchestrationService {
         return saved;
     }
 
+    /**
+     * NEW: BULK_CAMPAIGN session.
+     *
+     * Uses emailThreadId field to store campaignId (avoids schema change).
+     * clientName/clientEmail are set to the preview client's values.
+     */
+    @Transactional
+    public EmailApprovalSession initiateBulkApprovalSession(GeneratedEmailDto email,
+                                                            String campaignId,
+                                                            int totalClients,
+                                                            CampaignClient previewClient,
+                                                            String fileId) {
+        EmailApprovalSession session = new EmailApprovalSession();
+        session.setClientName(previewClient.getClientName());
+        session.setClientEmail(previewClient.getClientEmail());
+        session.setCurrentSubject(email.getSubject());
+        session.setCurrentBody(email.getBody());
+        session.setFileId(fileId);
+        session.setSessionType("BULK_CAMPAIGN");
+        session.setStatus("PENDING_APPROVAL");
+
+        // Reuse emailThreadId to store campaignId — no schema change needed
+        session.setEmailThreadId(campaignId);
+
+        // Store total client count in clientReplyContent for WhatsApp preview
+        session.setClientReplyContent(String.valueOf(totalClients));
+
+        EmailApprovalSession saved = sessionRepository.save(session);
+
+        // Send WhatsApp preview
+        whatsAppNotificationService.sendBulkForApproval(saved);
+
+        log.info("[Approval] BULK_CAMPAIGN session created — sessionId={} campaignId={} totalClients={}",
+                saved.getSessionId(), campaignId, totalClients);
+        return saved;
+    }
+
+    // ── Personalization ───────────────────────────────────────────────────────
+
+    /**
+     * Replaces {clientName} and {clientCompany} placeholders in the template.
+     *
+     * The AI generates the template with these placeholders.
+     * This method is called per-client at send time.
+     */
+    private String personalize(String template, CampaignClient client) {
+        if (template == null) return "";
+        String clientName = client.getClientName() != null ? client.getClientName() : "";
+        String clientCompany = client.getClientCompany() != null ? client.getClientCompany() : "";
+        return template
+                .replace("{clientName}", clientName)
+                .replace("{clientCompany}", clientCompany);
+    }
+
+    // ── Utilities ─────────────────────────────────────────────────────────────
+
     private boolean isTerminalStatus(String status) {
         return "APPROVED".equals(status)
                 || "EXPIRED".equals(status)
@@ -206,32 +353,11 @@ public class ApprovalOrchestrationService {
         return replyText == null ? "" : replyText.trim();
     }
 
-    /**
-     * Case-insensitive APPROVE detection.
-     *
-     * Accepts all variants:
-     *   "approve", "Approve", "APPROVE", "approve.", "approve ✅",
-     *   "please approve", "ok approve it", "APPROVE NOW", etc.
-     *
-     * Rejects feedback that merely contains the word in context:
-     *   "don't approve" → still treated as feedback (no word boundary stripping issue
-     *   since the regex uses \bAPPROVE\b on the uppercased string)
-     */
     private boolean isApproveCommand(String normalizedReply) {
         if (normalizedReply == null || normalizedReply.isBlank()) return false;
-
-        // Uppercase everything first — makes all checks truly case-insensitive
         String upper = normalizedReply.toUpperCase();
-
-        // Fast path: exact match after uppercasing
         if (APPROVE_KEYWORD.equals(upper)) return true;
-
-        // Strip all non-alphanumeric characters (punctuation, emojis, spaces normalised)
-        // then check for word-boundary match of APPROVE
-        String alphaOnly = upper.replaceAll("[^A-Z0-9 ]", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
-
-        return alphaOnly.matches(".*\\bAPPROVE\\b.*");
+        String alphaNum = upper.replaceAll("[^A-Z0-9 ]", " ").replaceAll("\\s+", " ").trim();
+        return alphaNum.matches(".*\\bAPPROVE\\b.*");
     }
 }

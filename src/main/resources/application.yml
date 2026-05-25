@@ -66,8 +66,33 @@ app:
       port: 993
       password: sxzf mgbr sjqq cwcs
     poll-interval-ms: 60000
+    lookback-hours: 24
+    campaign-validity-days: 7
   email:
     from-name: AskOxy Team
+
+  # ─── Multi-Sender Company Accounts (Round-Robin Bulk Campaigns) ──────────────
+  # GoDaddy SMTP: smtpout.secureserver.net : 587
+  senders:
+    - email: sales@oxyglobaltech.xyz
+      password: Test@1235
+      name: OxyGlobal Sales
+
+    - email: marketing@oxyglobaltech.info
+      password: Test@1235
+      name: OxyGlobal Marketing
+
+    - email: CEO@oxyglobaltech.net
+      password: Test*@1235
+      name: OxyGlobal CEO
+
+    - email: VThatavarti@gccmate.com
+      password: Gccmate@1919
+      name: GCC Mate
+
+    - email: VThavarti@oxygold.ai
+      password: Oxygold@1919
+      name: OxyGold AI
 
 ultramsg:
   instance-id: instance176023
@@ -120,6 +145,7 @@ management:
   health:
     redis:
       enabled: false
+
 logging:
   level:
     root: INFO
@@ -128,6 +154,7 @@ logging:
     org.springframework.scheduling: INFO
   file:
     name: logs/mail-automation.log
+
 aws:
   s3:
     bucket: radha-clone

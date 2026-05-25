@@ -19,28 +19,27 @@ public class ClientIntelligenceAgent {
     public String analyze(String ragContext, String clientName, String feedbackHistory) {
         boolean hasFeedback = feedbackHistory != null && !feedbackHistory.isBlank();
 
-        String systemPrompt = """
-                You are a company intelligence extractor.
-                
-                You are given content from OUR company's documents (brochures, decks, product docs).
-                Your job is to extract clear, specific facts about OUR company that can be used
-                to introduce ourselves to a potential client named """ + clientName + """
-                
-                Extract ONLY what is explicitly stated in the document. Do NOT invent or assume anything.
-                
-                Return ONLY valid JSON:
-                {
-                  "companyName": "",
-                  "whatWeDo": "",
-                  "ourProducts": [],
-                  "ourServices": [],
-                  "ourCapabilities": [],
-                  "ourDifferentiators": [],
-                  "industriesWeServe": [],
-                  "notableAchievements": [],
-                  "technologyStack": []
-                }
-                """;
+        String systemPrompt = String.join("\n",
+                "You are a company intelligence extractor.",
+                "",
+                "You are given content from OUR company's documents (brochures, decks, product docs).",
+                "Your job is to extract clear, specific facts about OUR company that can be used",
+                "to introduce ourselves to a potential client named " + clientName,
+                "",
+                "Extract ONLY what is explicitly stated in the document. Do NOT invent or assume anything.",
+                "",
+                "Return ONLY valid JSON:",
+                "{",
+                "  \"companyName\": \"\",",
+                "  \"whatWeDo\": \"\",",
+                "  \"ourProducts\": [],",
+                "  \"ourServices\": [],",
+                "  \"ourCapabilities\": [],",
+                "  \"ourDifferentiators\": [],",
+                "  \"industriesWeServe\": [],",
+                "  \"notableAchievements\": [],",
+                "  \"technologyStack\": []",
+                "}");
 
         String userPrompt = "OUR COMPANY DOCUMENTS:\n" + ragContext
                 + (hasFeedback

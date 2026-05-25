@@ -11,62 +11,93 @@ import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
+/**
+ * Handles all outbound email delivery.
+ *
+ * Two modes:
+ *
+ *  1. SINGLE-SENDER (existing CLIENT_REPLY / old CAMPAIGN flow)
+ *     send(toEmail, emailDto, inReplyTo, references)
+ *     → uses the default injected JavaMailSender (spring.mail.*)
+ *
+ *  2. MULTI-SENDER (new BULK_CAMPAIGN flow)
+ *     send(mailSender, fromEmail, fromName, toEmail, emailDto)
+ *     → uses the caller-supplied JavaMailSender (one per company account)
+ *
+ * The UUID-based Message-ID fix is applied in both modes.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EmailDeliveryService {
 
+    /** Default single sender — used for CLIENT_REPLY and legacy CAMPAIGN sessions */
     private final JavaMailSender mailSender;
 
     @Value("${spring.mail.username}")
-    private String fromEmail;
+    private String defaultFromEmail;
 
     @Value("${app.email.from-name}")
-    private String fromName;
+    private String defaultFromName;
 
-    // ── Derive a stable domain from our sending address ───────────────────────
-    // e.g. "venagantirishi@gmail.com" → "gmail.com"
-    // Used to build a portable Message-ID that works on any host (local or Railway).
-    private String senderDomain() {
-        if (fromEmail != null && fromEmail.contains("@")) {
-            return fromEmail.substring(fromEmail.indexOf('@') + 1);
-        }
-        return "mailautomation.app";
-    }
+    // ── Mode 1: Single-sender (existing flow — unchanged) ─────────────────────
 
-    // ── Convenience overload (no threading headers) ───────────────────────────
     public String send(String toEmail, GeneratedEmailDto email) {
         return send(toEmail, email, null, null);
     }
 
-    /**
-     * Sends an email and returns the Message-ID we stamped on it.
-     *
-     * FIX: We now generate the Message-ID ourselves using UUID + sender domain
-     * BEFORE calling saveChanges() / send().  This guarantees:
-     *   1. The ID never contains "@LAPTOP-xxx" (local hostname leak).
-     *   2. The exact same ID is persisted in sent_message_id in the DB.
-     *   3. When the client hits Reply, their email's In-Reply-To will match
-     *      what's stored in DB → GmailPollingService GUARD 4 passes correctly.
-     *
-     * @param toEmail    recipient address
-     * @param email      subject + body DTO
-     * @param inReplyTo  Message-ID of email we are replying to (null for campaigns)
-     * @param references References header value (null for campaigns)
-     * @return the Message-ID stamped on the sent email
-     */
     public String send(String toEmail, GeneratedEmailDto email,
                        String inReplyTo, String references) {
+        return sendInternal(
+                mailSender, defaultFromEmail, defaultFromName,
+                toEmail, email.getSubject(), email.getBody(),
+                inReplyTo, references
+        );
+    }
+
+    // ── Mode 2: Multi-sender (new BULK_CAMPAIGN flow) ─────────────────────────
+
+    /**
+     * Sends email using a specific JavaMailSender (one of the 6 company accounts).
+     *
+     * @param sender    The JavaMailSender to use (from MultiSenderConfig)
+     * @param fromEmail The sender's email address (for the From header)
+     * @param fromName  The sender's display name (for the From header)
+     * @param toEmail   Recipient email
+     * @param email     Subject + body DTO
+     * @return          The Gmail Message-ID of the sent email
+     */
+    public String send(JavaMailSender sender,
+                       String fromEmail,
+                       String fromName,
+                       String toEmail,
+                       GeneratedEmailDto email) {
+        return sendInternal(
+                sender, fromEmail, fromName,
+                toEmail, email.getSubject(), email.getBody(),
+                null, null
+        );
+    }
+
+    // ── Core internal sender ──────────────────────────────────────────────────
+
+    private String sendInternal(JavaMailSender sender,
+                                String fromEmail,
+                                String fromName,
+                                String toEmail,
+                                String subject,
+                                String body,
+                                String inReplyTo,
+                                String references) {
         try {
-            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessage message = sender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
 
             helper.setFrom(fromEmail, fromName);
             helper.setTo(toEmail);
-            helper.setSubject(email.getSubject());
-            helper.setText(email.getBody(), false);
+            helper.setSubject(subject);
+            helper.setText(body, false);
 
-            // ── Threading headers (CLIENT_REPLY sessions only) ────────────────
             if (inReplyTo != null && !inReplyTo.isBlank()) {
                 message.setHeader("In-Reply-To", inReplyTo.trim());
             }
@@ -74,36 +105,33 @@ public class EmailDeliveryService {
                 message.setHeader("References", references.trim());
             }
 
-            // ── FIX: Set a deterministic Message-ID BEFORE saveChanges() ─────
-            // Format: <UUID@sender-domain>
-            // e.g.  : <550e8400-e29b-41d4-a716-446655440000@gmail.com>
-            //
-            // Why not use saveChanges() default?
-            //   saveChanges() builds the Message-ID from InetAddress.getLocalHost()
-            //   which gives "@LAPTOP-QO76BQ" locally and something unpredictable
-            //   on Railway containers. We own the ID instead.
-            // ─────────────────────────────────────────────────────────────────
-            String customMessageId = "<" + UUID.randomUUID() + "@" + senderDomain() + ">";
-            message.setHeader("Message-ID", customMessageId);
+            // ── UUID-based Message-ID fix ──────────────────────────────────────
+            // Generate a proper RFC-compliant Message-ID BEFORE saveChanges()
+            // so we always get a real ID (not @LAPTOP-xxx from local hostname).
+            String domain = fromEmail.contains("@")
+                    ? fromEmail.substring(fromEmail.indexOf('@') + 1)
+                    : "mail.oxyglobal.com";
 
-            // saveChanges() finalises MIME structure; Message-ID header is already set
-            // so it won't be overwritten.
+            String customMessageId = "<" + UUID.randomUUID() + "@" + domain + ">";
+            message.setHeader("Message-ID", customMessageId);
             message.saveChanges();
 
-            // Verify our header survived saveChanges()
-            String[] ids = message.getHeader("Message-ID");
-            String sentMessageId = (ids != null && ids.length > 0) ? ids[0].trim() : customMessageId;
+            sender.send(message);
 
-            mailSender.send(message);
+            // Re-read after saveChanges to get the final committed value
+            String sentMessageId = message.getMessageID();
+            if (sentMessageId == null || sentMessageId.isBlank()) {
+                sentMessageId = customMessageId;
+            }
 
-            log.info("[EmailDelivery] ✅ Email sent — to={} messageId={} inReplyTo={}",
-                    toEmail, sentMessageId, inReplyTo);
+            log.info("[EmailDelivery] Sent → to={} from={} messageId={} inReplyTo={}",
+                    toEmail, fromEmail, sentMessageId, inReplyTo);
 
             return sentMessageId;
 
         } catch (Exception ex) {
-            log.error("[EmailDelivery] ❌ Failed to send email to={}", toEmail, ex);
-            throw new RuntimeException("Failed to send email to " + toEmail, ex);
+            throw new RuntimeException(
+                    "Failed to send email to " + toEmail + " from " + fromEmail, ex);
         }
     }
 }

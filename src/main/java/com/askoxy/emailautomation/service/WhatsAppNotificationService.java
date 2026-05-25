@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -196,5 +197,59 @@ public class WhatsAppNotificationService {
     private String truncate(String text, int maxLength) {
         if (text == null) return "";
         return text.length() <= maxLength ? text : text.substring(0, maxLength) + "...";
+    }
+
+    public void sendBulkForApproval(EmailApprovalSession session) {
+        int totalClients = 0;
+        try {
+            totalClients = Integer.parseInt(session.getClientReplyContent());
+        } catch (Exception ignored) {}
+
+        // Show the template with placeholders filled in for the preview client
+        String previewBody = session.getCurrentBody()
+                .replace("{clientName}",    session.getClientName())
+                .replace("{clientCompany}", "their company"); // preview approximation
+
+        String message = "📧 *BULK CAMPAIGN APPROVAL NEEDED*\n\n" +
+                "Campaign ID: " + session.getEmailThreadId() + "\n" +
+                "Total Clients: " + totalClients + "\n" +
+                "Preview Client: " + session.getClientName() + " <" + session.getClientEmail() + ">\n\n" +
+                "─────────────────────\n" +
+                "*Subject:* " + session.getCurrentSubject() + "\n\n" +
+                "*Body Preview:*\n" + previewBody + "\n" +
+                "─────────────────────\n\n" +
+                "✅ Reply *APPROVE* to send to all " + totalClients + " clients.\n" +
+                "✏️ Or reply with feedback to regenerate.";
+
+        sendWhatsApp(message);
+        log.info("[WhatsApp] Bulk campaign approval message sent for campaignId={}",
+                session.getEmailThreadId());
+    }
+
+    /**
+     * Sends a WhatsApp summary after the bulk campaign completes.
+     * Shows total sent, failed, and which emails failed (if any).
+     */
+    public void sendBulkCampaignSummary(String campaignId,
+                                        int sentCount,
+                                        int failedCount,
+                                        List<String> failedEmails) {
+        String statusEmoji = failedCount == 0 ? "✅" : "⚠️";
+
+        StringBuilder message = new StringBuilder();
+        message.append(statusEmoji).append(" *BULK CAMPAIGN COMPLETE*\n\n");
+        message.append("Campaign ID: ").append(campaignId).append("\n");
+        message.append("✅ Sent:   ").append(sentCount).append("\n");
+        message.append("❌ Failed: ").append(failedCount).append("\n");
+
+        if (!failedEmails.isEmpty()) {
+            message.append("\n*Failed Recipients:*\n");
+            for (String email : failedEmails) {
+                message.append("  • ").append(email).append("\n");
+            }
+        }
+
+        sendWhatsApp(message.toString());
+        log.info("[WhatsApp] Bulk campaign summary sent. sent={} failed={}", sentCount, failedCount);
     }
 }
