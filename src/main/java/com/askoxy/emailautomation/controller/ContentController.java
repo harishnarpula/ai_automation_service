@@ -12,9 +12,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-
+import java.util.Map;
 import java.util.List;
-
+import com.askoxy.emailautomation.entity.PaperclipItem;
+import com.askoxy.emailautomation.repository.PaperclipRepository;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1")
@@ -24,6 +25,7 @@ public class ContentController {
     private final IngestionService ingestionService;
     private final ContentFormatterService formatterService;
     private final VideoService videoService;
+    private final PaperclipRepository paperclipRepository;
 
     // ── COMPANY UPLOAD ────────────────────────────────────────────────────────
 
@@ -77,8 +79,20 @@ public class ContentController {
     }
 
     @GetMapping("/content/approved")
-    public ApiResponse<List<ContentItem>> getApprovedContent() {
-        return ApiResponse.success(contentService.getApproved());
+    public ApiResponse<?> getApprovedContent(
+            @RequestParam(required = false) String entityType) {
+
+        if ("VIDEO".equalsIgnoreCase(entityType)) {
+            return ApiResponse.success(videoService.getApproved());
+        }
+        if ("PAPERCLIP".equalsIgnoreCase(entityType)) {
+            return ApiResponse.success(contentService.getApprovedPaperclips());
+        }
+        if ("CONTENT".equalsIgnoreCase(entityType)) {
+            return ApiResponse.success(contentService.getApproved());
+        }
+        // no entityType → return all three combined
+        return ApiResponse.success(contentService.getAllApproved());
     }
 
     @GetMapping("/content/{contentId}")
@@ -128,7 +142,7 @@ public class ContentController {
 
     @GetMapping("/video/all")
     public ApiResponse<List<VideoContent>> getAllVideos() {
-        return ApiResponse.success(videoService.getAll());
+        return ApiResponse.success(videoService.getUploaded());
     }
 
     // ── SHARED ACTIONS (video + content both use these) ───────────────────────
@@ -170,5 +184,18 @@ public class ContentController {
     @PostMapping("/blog/publish")
     public ApiResponse<BlogFormatDto> publishBlog(@RequestBody BlogFormatDto blogResult) {
         return ApiResponse.success(videoService.publishBlog(blogResult));
+    }
+
+    @PostMapping(value = "/paperclip/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<PaperclipResponse> analyzePaperclip(
+            @RequestPart("files") List<MultipartFile> files) {
+        return ApiResponse.success(contentService.analyzePaperclip(files));
+    }
+
+    @GetMapping("/paperclip/all")
+    public ApiResponse<List<PaperclipResponse>> getAllPaperclips() {
+
+        return ApiResponse.success(contentService.getAllPaperclips());
+
     }
 }

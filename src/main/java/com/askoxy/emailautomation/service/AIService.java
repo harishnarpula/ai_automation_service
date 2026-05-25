@@ -3,10 +3,12 @@ package com.askoxy.emailautomation.service;
 import com.openai.client.OpenAIClient;
 import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCreateParams;
-
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
+import java.util.Map;
 import java.util.Base64;
 import java.util.UUID;
-
+import org.springframework.beans.factory.annotation.Value;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AIService {
 
+    @Value("${spring.ai.openai.api-key}")
+    private String openAiApiKey;
     private final OpenAIClient openAIClient;
     private final S3Service s3Service;
 
@@ -37,7 +41,24 @@ public class AIService {
         log.info("Sending chat request to OpenAI SDK");
         try {
             ResponseCreateParams params = ResponseCreateParams.builder()
-                    .model("gpt-4o")
+                    .model("gpt-4.1-mini")                    .instructions(systemPrompt)
+                    .input(userPrompt)
+                    .build();
+            Response response = openAIClient.responses().create(params);
+            String content = extractResponseText(response);
+            log.info("Chat completion successful: {} chars", content.length());
+            return content;
+        } catch (Exception ex) {
+            log.error("Chat completion failed", ex);
+            throw new RuntimeException("AI chat generation failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    public String chatWithModel(String systemPrompt, String userPrompt, String model) {
+        log.info("Sending chat request to OpenAI SDK [model={}]", model);
+        try {
+            ResponseCreateParams params = ResponseCreateParams.builder()
+                    .model(model)
                     .instructions(systemPrompt)
                     .input(userPrompt)
                     .build();
@@ -55,8 +76,7 @@ public class AIService {
         log.info("Sending chat request to OpenAI SDK");
         try {
             ResponseCreateParams params = ResponseCreateParams.builder()
-                    .model("gpt-4o")
-                    .input(prompt)
+                    .model("gpt-4.1-mini")                    .input(prompt)
                     .build();
             Response response = openAIClient.responses().create(params);
             String content = extractResponseText(response);
@@ -110,39 +130,46 @@ public class AIService {
             String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
 
             String prompt = """
-                    Analyze this image carefully.
+Read this newspaper/document image carefully.
 
-                    Extract:
-                    - visible text
-                    - banners
-                    - posters
-                    - screenshots
-                    - marketing messages
-                    - business information
-                    - important context
+Extract ALL readable text exactly.
 
-                    Return only clean readable text.
-                    """;
+Important:
+- Read headlines
+- Read paragraphs
+- Read article text
+- Read company names
+- Read people names
+- Read report names
+- Preserve meaning
+- Do not summarize
+- Return FULL extracted text only
+
+If text is unclear, still try best OCR extraction.
+""";
 
             com.openai.models.responses.ResponseInputItem messageItem = 
                 com.openai.models.responses.ResponseInputItem.ofMessage(
                     com.openai.models.responses.ResponseInputItem.Message.builder()
                         .role(com.openai.models.responses.ResponseInputItem.Message.Role.of("user"))
                         .addContent(com.openai.models.responses.ResponseInputText.builder().text(prompt).build())
-                        .addContent(com.openai.models.responses.ResponseInputImage.builder()
-                            .imageUrl("data:image/jpeg;base64," + base64)
-                            .build())
+                            .addContent(com.openai.models.responses.ResponseInputImage.builder()
+                                    .imageUrl("data:image/jpeg;base64," + base64)
+                                    .detail(
+                                            com.openai.models.responses.ResponseInputImage.Detail.HIGH
+                                    )
+                                    .build())
                         .build()
                 );
 
             ResponseCreateParams params = ResponseCreateParams.builder()
-                    .model("gpt-4o")
-                    .inputOfResponse(List.of(messageItem))
+                    .model("gpt-4.1-mini")                    .inputOfResponse(List.of(messageItem))
                     .maxOutputTokens(1000)
                     .build();
 
             Response response = openAIClient.responses().create(params);
             String text = extractResponseText(response);
+            log.info("OCR RESULT:\n{}", text);
             log.info("Image extraction complete: {} chars", text.length());
             return text;
         } catch (Exception ex) {
@@ -242,9 +269,69 @@ Rules:
                 Create a DALL-E prompt.
                 """.formatted(
                 platformLabel,
-                generatedContent.substring(0, Math.min(generatedContent.length(), 500))
-        );
+                (generatedContent != null
+                        ? generatedContent.substring(
+                        0,
+                        Math.min(generatedContent.length(), 500))
+                        : "")        );
 
         return chat(system, user);
+    }
+
+
+    public String webSearch(String query) {
+
+        log.info("OpenAI web search: {}", query);
+
+        try {
+
+            RestTemplate restTemplate = new RestTemplate();
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(openAiApiKey);
+            Map<String, Object> payload = Map.of(
+                    "model", "gpt-4o-search-preview",
+                    "messages", List.of(
+                            Map.of(
+                                    "role", "user",
+                                    "content", query
+                            )
+                    )
+            );
+
+            ResponseEntity<Map> response =
+                    restTemplate.exchange(
+                            "https://api.openai.com/v1/chat/completions",
+                            HttpMethod.POST,
+                            new HttpEntity<>(payload, headers),
+                            Map.class
+                    );
+
+            List<Map<String, Object>> choices =
+                    (List<Map<String, Object>>)
+                            response.getBody().get("choices");
+
+            if (choices == null || choices.isEmpty())
+                return null;
+
+            Map<String, Object> message =
+                    (Map<String, Object>)
+                            choices.get(0).get("message");
+
+            Object contentObj = message.get("content");
+
+            String content = contentObj != null
+                    ? contentObj.toString()
+                    : null;
+
+            return content != null ? content.trim() : null;
+
+        } catch (Exception ex) {
+
+            log.error("OpenAI web search failed", ex);
+
+            return null;
+        }
     }
 }

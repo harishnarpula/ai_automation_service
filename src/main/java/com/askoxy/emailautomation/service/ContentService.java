@@ -7,6 +7,7 @@ import com.askoxy.emailautomation.enums.PlatformType;
 import com.askoxy.emailautomation.repository.ContentItemRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Qualifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -15,9 +16,14 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import com.askoxy.emailautomation.repository.VideoContentRepository;
+
 
 import java.util.*;
 import java.util.stream.Collectors;
+import com.askoxy.emailautomation.entity.PaperclipItem;
+import com.askoxy.emailautomation.repository.PaperclipRepository;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -31,8 +37,20 @@ public class ContentService {
     private final VectorStore vectorStore;
     private final ObjectMapper objectMapper;
     private final S3Service s3Service;
+    private final PaperclipRepository paperclipRepository;
+    private final VideoContentRepository videoContentRepository;
 
-    public ContentService(AIService aiService, DocumentService documentService, IngestionService ingestionService, ContentItemRepository contentItemRepository, @org.springframework.beans.factory.annotation.Qualifier("radhaAiVectorStore") VectorStore vectorStore, ObjectMapper objectMapper, S3Service s3Service) {
+    public ContentService(
+            AIService aiService,
+            DocumentService documentService,
+            IngestionService ingestionService,
+            ContentItemRepository contentItemRepository,
+            @Qualifier("radhaAiVectorStore") VectorStore vectorStore,
+            ObjectMapper objectMapper,
+            S3Service s3Service,
+            PaperclipRepository paperclipRepository,
+            VideoContentRepository videoContentRepository
+    ) {
         this.aiService = aiService;
         this.documentService = documentService;
         this.ingestionService = ingestionService;
@@ -40,8 +58,11 @@ public class ContentService {
         this.vectorStore = vectorStore;
         this.objectMapper = objectMapper;
         this.s3Service = s3Service;
-    }
+        this.paperclipRepository = paperclipRepository;
 
+        // THIS FIXES ERROR
+        this.videoContentRepository = videoContentRepository;
+    }
     private static final String REASONING_SYSTEM = """
             You are an expert content strategist and editor for AskOxy Group.
 
@@ -70,74 +91,93 @@ public class ContentService {
             """;
 
     private static final String GENERATION_SYSTEM_GROUPED = """
-            You are an expert content writer for AskOxy Group, writing on behalf of
-            Radha Krishna Thatavrthi, CEO & Founder.
+        You are an expert business content writer for AskOxy Group.
 
-            Generate rich, professional business content based on the CEO's idea.
-            Use the provided knowledge base context to add accurate facts and details.
+        Write in a modern founder/CEO communication style.
 
-            SPELLING & GRAMMAR RULES (critical):
-            - Zero spelling mistakes allowed in the output
-            - Zero grammar mistakes allowed in the output
-            - Business terms must be exact: OxyLoans, OxyGold.ai, OxyBricks,
-              AskOxy.AI, StudyAbroad, OxyGlobal, Radha Sir, AskOxy Group
-            - Numbers and percentages must be accurate — do NOT invent statistics
-            - If a fact is not in the knowledge base, do NOT include it
+        RULES:
+        - Sound natural, intelligent, and human
+        - Use a confident leadership tone
+        - Keep content professional and insightful
+        - Use first-person naturally only when needed
+        - Avoid repeatedly mentioning founder names
+        - Do NOT start with:
+          "As Radha Krishna Thatavarthi..."
+        - Avoid robotic or overly promotional wording
+        - Write like a premium LinkedIn/blog post
+        - Keep sentences clear and engaging
+        - Focus on value, insights, and business impact
 
-            CONTENT RULES:
-            - Tone: confident, professional, warm — as Radha Sir would speak
-            - First person: "We at OxyLoans..." or "I'm proud to announce..."
-            - Value-driven: always explain what benefit the user gets
-            - Avoid corporate jargon — write simply and clearly
+        BUSINESS RULES:
+        - Zero spelling mistakes allowed
+        - Zero grammar mistakes allowed
+        - Business terms must remain exact:
+          OxyLoans, OxyGold.ai, OxyBricks,
+          AskOxy.AI, StudyAbroad, OxyGlobal,
+          AskOxy Group
+        - Do NOT invent fake statistics
+        - If facts are unavailable, avoid hallucinations
 
-            Return ONLY valid JSON — no explanation, no markdown fences:
-            {
-              "title": "compelling headline — 6-12 words",
-              "summary": "2-3 sentence overview of what this content is about",
-              "intro": "1-2 sentence hook that grabs attention",
-              "body": "main content — 150 to 300 words — well written, zero errors, first person as Radha Sir",
-              "closing": "1-2 sentence strong closing thought",
-              "isGrouped": true
-            }
-            """;
+        Return ONLY valid JSON:
+        {
+          "title": "compelling headline — 6-12 words",
+          "summary": "2-3 sentence overview",
+          "intro": "strong opening hook",
+          "body": "150-300 words of premium business content",
+          "closing": "strong concluding thought",
+          "hashtags": "5-8 relevant hashtags",
+          "isGrouped": true
+        }
+        """;
 
     private static final String GENERATION_SYSTEM_SEPARATE = """
-            You are an expert content writer for AskOxy Group, writing on behalf of
-            Radha Krishna Thatavrthi, CEO & Founder.
+        You are an expert business content writer for AskOxy Group.
 
-            The CEO has given input covering MULTIPLE different topics.
-            Generate separate focused content for each topic.
-            Use the knowledge base context to add accurate facts.
+        Write in a modern founder/CEO communication style.
 
-            SPELLING & GRAMMAR RULES (critical):
-            - Zero spelling mistakes allowed in the output
-            - Zero grammar mistakes allowed in the output
-            - Business terms must be exact: OxyLoans, OxyGold.ai, OxyBricks,
-              AskOxy.AI, StudyAbroad, OxyGlobal, Radha Sir, AskOxy Group
-            - Do NOT invent statistics or facts not in the knowledge base
+        RULES:
+        - Sound natural, intelligent, and human
+        - Use a confident leadership tone
+        - Keep content professional and insightful
+        - Use first-person naturally only when needed
+        - Avoid repeatedly mentioning founder names
+        - Do NOT start with:
+          "As Radha Krishna Thatavarthi..."
+        - Avoid robotic or overly promotional wording
+        - Write like a premium LinkedIn/blog post
+        - Keep sentences clear and engaging
+        - Focus on value, insights, and business impact
 
-            CONTENT RULES:
-            - Tone: confident, professional, warm — as Radha Sir would speak
-            - First person: "We at OxyLoans..." or "I believe..."
-            - Each section should stand alone as a complete piece of content
-            - 100-200 words per section
+        BUSINESS RULES:
+        - Zero spelling mistakes allowed
+        - Zero grammar mistakes allowed
+        - Business terms must remain exact:
+          OxyLoans, OxyGold.ai, OxyBricks,
+          AskOxy.AI, StudyAbroad, OxyGlobal,
+          AskOxy Group
+        - Do NOT invent fake statistics
+        - If facts are unavailable, avoid hallucinations
 
-            Return ONLY valid JSON — no explanation, no markdown fences:
+        The CEO input contains MULTIPLE topics.
+        Create separate sections for each topic.
+
+        Return ONLY valid JSON:
+        {
+          "title": "overall title",
+          "summary": "overall summary",
+          "intro": "opening hook",
+          "body": "short connecting overview",
+          "sections": [
             {
-              "title": "overall theme title — 6-12 words",
-              "summary": "2-3 sentence overview connecting all topics",
-              "intro": "1-2 sentence overall hook",
-              "body": "brief intro connecting all topics — 80-120 words, first person as Radha Sir",
-              "sections": [
-                {
-                  "heading": "Topic 1 title",
-                  "content": "Topic 1 content — 100-200 words, zero errors, first person as Radha Sir"
-                }
-              ],
-              "closing": "1-2 sentence strong closing thought from Radha Sir",
-              "isGrouped": false
+              "heading": "Topic title",
+              "content": "100-200 words of premium business content"
             }
-            """;
+          ],
+          "closing": "strong concluding thought",
+          "hashtags": "5-8 relevant hashtags",
+          "isGrouped": false
+        }
+        """;
 
     @Transactional
     public ContentItem submit(ContentDto req) throws Exception {
@@ -293,6 +333,22 @@ public class ContentService {
         return contentItemRepository.findByStatus(ContentStatus.APPROVED);
     }
 
+    public List<PaperclipItem> getApprovedPaperclips() {
+        return paperclipRepository.findAll().stream()
+                .filter(p -> Boolean.TRUE.equals(p.getAddedToClone())
+                        || Boolean.TRUE.equals(p.getAddedToBlog()))
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    public Map<String, Object> getAllApproved() {
+        return Map.of(
+                "content",    contentItemRepository.findByStatus(ContentStatus.APPROVED),
+                "videos",     videoContentRepository.findByStatus(ContentStatus.APPROVED),
+                "paperclips", getApprovedPaperclips()
+        );
+    }
+
+
     private String reasonInstruction(String rawInstruction, String platformLabel) {
         String user = """
                 BUSINESS PLATFORM: %s
@@ -431,7 +487,371 @@ public class ContentService {
                 || lower.contains("with picture") || lower.contains("with photo");
     }
 
+    // ═══════════════════════════════════════════════════
+    // PAPERCLIP
+    // ═══════════════════════════════════════════════════
+
+    private static final String PAPERCLIP_SYSTEM = """
+        You are a professional document intelligence AI.
+        Analyze the provided document(s) and return ONLY valid JSON. No explanation, no markdown.
+
+        JSON SCHEMA:
+        {
+          "summary": {
+            "shortSummary": "1-2 sentence summary",
+            "detailedSummary": "Comprehensive summary",
+            "keyPoints": ["point 1"],
+            "actionItems": ["action 1"]
+          },
+          "people": [
+            { "name": "Full Name", "designation": "Job Title", "company": "Company" }
+          ],
+          "companies": [
+            { "name": "Company Name" }
+          ],
+          "mentionedReports": ["Exact report title as mentioned"]
+        }
+
+            RULES:
+            - People: founders, speakers, executives, investors, authors.
+            - Companies: startups, vendors, partners, investors, organizations.
+            - Reports: ANY mention of Gartner, McKinsey, Deloitte, WHO, annual reports,
+              research papers, ESG reports, surveys, studies.
+            - ONLY include facts explicitly visible in the source content
+            - Do NOT infer announcements or investments
+            - Do NOT use external knowledge
+            - Do NOT invent statistics
+            - If information is unclear, omit it
+        """;
+
+    public PaperclipResponse analyzePaperclip(List<MultipartFile> files) {
+        if (files == null || files.isEmpty()) throw new RuntimeException("Upload at least one file.");
+        if (files.size() > 20) throw new RuntimeException("Max 20 files.");
+
+        // ✅ STEP 0: Upload raw files to S3 before extraction
+        List<String> s3Keys = new java.util.ArrayList<>();
+        for (MultipartFile file : files) {
+            try {
+                String key = "paperclips/" + UUID.randomUUID() + "_" + file.getOriginalFilename();
+                s3Service.uploadFile(file, key);
+                s3Keys.add(key);
+                log.info("Paperclip file uploaded to S3: {}", key);
+            } catch (Exception ex) {
+                log.warn("S3 upload failed for {}: {}", file.getOriginalFilename(), ex.getMessage());
+            }
+        }
+        String s3FileUrl = String.join(",", s3Keys);
+
+        StringBuilder combined = new StringBuilder();
+        for (MultipartFile file : files) {
+            try {
+
+                String name =
+                        file.getOriginalFilename() != null
+                                ? file.getOriginalFilename().toLowerCase()
+                                : "";
+
+                String text;
+
+                // IMAGE FILES
+                if (
+                        name.endsWith(".png") ||
+                                name.endsWith(".jpg") ||
+                                name.endsWith(".jpeg") ||
+                                name.endsWith(".webp")
+                ) {
+
+                    log.info(
+                            "Using GPT Vision OCR for image: {}",
+                            name
+                    );
+
+                    text =
+                            aiService.extractImageText(file);
+
+                }
+
+                // OTHER FILES
+                else {
+
+                    text =
+                            documentService.extractText(file);
+                }
+
+                log.info(
+                        "EXTRACTED PAPERCLIP TEXT:\n{}",
+                        text
+                );
+
+                if (text != null && !text.isBlank()) {
+
+                    combined.append("\n\n=== FILE: ")
+                            .append(file.getOriginalFilename())
+                            .append(" ===\n\n")
+                            .append(text);
+                }
+
+            } catch (Exception ex) {
+
+                log.warn(
+                        "Could not extract: {} — {}",
+                        file.getOriginalFilename(),
+                        ex.getMessage()
+                );
+            }
+        }
+        String docText = combined.toString().trim();
+        if (docText.isBlank()) throw new RuntimeException("No text extracted.");
+        if (docText.length() > 12_000) docText = docText.substring(0, 12_000) + "\n[truncated]";
+
+        String rawJson = aiService.chatWithModel(
+                PAPERCLIP_SYSTEM,
+                "Analyze the following document:\n\n" + docText + "\n\nReturn ONLY the JSON.",
+                "gpt-4.1"
+        );
+        rawJson = rawJson
+                .replaceAll("(?s)```json\\s*", "")
+                .replaceAll("(?s)```\\s*", "")
+                .trim();
+
+        log.info("PAPERCLIP AI RAW JSON:\n{}", rawJson);
+
+        PaperclipRawExtraction raw;
+        try { raw = objectMapper.readValue(rawJson, PaperclipRawExtraction.class); }
+        catch (Exception ex) { log.error("Parse failed: {}", ex.getMessage()); raw = PaperclipRawExtraction.empty(); }
+
+        final PaperclipRawExtraction r = raw;
+        CompletableFuture<List<PaperclipAnalysisResult.Person>>  pf =
+                CompletableFuture.supplyAsync(() -> pcEnrichPeople(r.getPeople()));
+        CompletableFuture<List<PaperclipAnalysisResult.Company>> cf =
+                CompletableFuture.supplyAsync(() -> pcEnrichCompanies(r.getCompanies()));
+        CompletableFuture<List<PaperclipAnalysisResult.Report>>  rf =
+                CompletableFuture.supplyAsync(() -> pcEnrichReports(r.getMentionedReports()));
+
+        PaperclipAnalysisResult result = PaperclipAnalysisResult.builder()
+                .summary(pcBuildSummary(r.getSummary()))
+                .people(pf.join()).companies(cf.join()).reports(rf.join()).build();
+
+        String fileNames = files.stream()
+                .map(MultipartFile::getOriginalFilename)
+                .collect(Collectors.joining(", "));
+
+        PaperclipItem item = PaperclipItem.builder()
+                .paperclipId(UUID.randomUUID().toString())
+                .fileName(fileNames)           // ← ADD
+                .extractedText(docText)
+                .analysisJson(pcToJson(result))
+                .s3FileUrl(s3FileUrl)
+                .build();
+
+        paperclipRepository.save(item);
+
+        log.info("Paperclip saved: {}", item.getPaperclipId());
+        return PaperclipResponse.builder()
+                .paperclipId(item.getPaperclipId()).analysis(result).build();
+    }
+
+    public PaperclipResponse getPaperclip(String paperclipId) {
+        PaperclipItem item = paperclipRepository.findByPaperclipId(paperclipId)
+                .orElseThrow(() -> new RuntimeException("Not found: " + paperclipId));
+        try {
+            return PaperclipResponse.builder().paperclipId(paperclipId)
+                    .analysis(objectMapper.readValue(item.getAnalysisJson(),
+                            PaperclipAnalysisResult.class)).build();
+        } catch (Exception ex) { throw new RuntimeException("Parse error", ex); }
+    }
+
+    private List<PaperclipAnalysisResult.Person> pcEnrichPeople(List<PaperclipRawExtraction.RawPerson> list) {
+        if (list == null) return List.of();
+        return list.stream().map(p -> PaperclipAnalysisResult.Person.builder()
+                .name(p.getName()).designation(p.getDesignation()).company(p.getCompany())
+                .linkedin(pcLinkedIn(p.getName(), p.getCompany()))
+                .build()).collect(Collectors.toList());
+    }
+
+
+    private String pcLinkedIn(String name, String company) {
+
+        if (name == null || name.isBlank())
+            return null;
+
+        // OPENAI WEB SEARCH
+        try {
+
+            String result = aiService.webSearch("""
+            Find the official LinkedIn profile URL for:
+
+            Name: %s
+            Company: %s
+
+            Return ONLY the LinkedIn URL.
+            If not found return NONE.
+            """.formatted(name, company));
+
+            if (result != null
+                    && result.contains("linkedin.com/in/")) {
+
+                java.util.regex.Matcher matcher =
+                        java.util.regex.Pattern
+                                .compile(
+                                        "https://([a-z]{2,3}\\.)?linkedin\\.com/in/[A-Za-z0-9\\-_%]+",
+                                        java.util.regex.Pattern.CASE_INSENSITIVE
+                                )
+                                .matcher(result);
+
+                if (matcher.find())
+                    return matcher.group();
+            }
+
+        } catch (Exception ex) {
+
+            log.warn("OpenAI LinkedIn search failed: {}", name);
+        }
+
+        // FALLBACK SEARCH
+        try {
+
+            String q = java.net.URLEncoder.encode(
+                    name + " " + (company != null ? company : "")
+                            + " site:linkedin.com/in/",
+                    java.nio.charset.StandardCharsets.UTF_8);
+
+            org.jsoup.nodes.Document doc = org.jsoup.Jsoup
+                    .connect("https://duckduckgo.com/html/?q=" + q)
+                    .userAgent("Mozilla/5.0")
+                    .timeout(5000)
+                    .get();
+
+            java.util.regex.Matcher m =
+                    java.util.regex.Pattern
+                            .compile(
+                                    "linkedin\\.com/in/([a-zA-Z0-9\\-_%]+)"
+                            )
+                            .matcher(doc.html());
+
+            if (m.find())
+                return "https://www.linkedin.com/in/" + m.group(1);
+
+        } catch (Exception ex) {
+
+            log.warn("LinkedIn fallback failed: {}", name);
+        }
+
+        return null;
+    }
+
+    private static final Map<String, String> PC_SITES = Map.ofEntries(
+            Map.entry("openai","https://openai.com"), Map.entry("google","https://google.com"),
+            Map.entry("microsoft","https://microsoft.com"), Map.entry("amazon","https://amazon.com"),
+            Map.entry("meta","https://meta.com"), Map.entry("nvidia","https://nvidia.com"),
+            Map.entry("deloitte","https://deloitte.com"), Map.entry("mckinsey","https://mckinsey.com"),
+            Map.entry("gartner","https://gartner.com"), Map.entry("who","https://who.int"),
+            Map.entry("accenture","https://accenture.com"), Map.entry("infosys","https://infosys.com"),
+            Map.entry("wipro","https://wipro.com"), Map.entry("tcs","https://tcs.com"),
+            Map.entry("ibm","https://ibm.com"), Map.entry("pwc","https://pwc.com"),
+            Map.entry("kpmg","https://kpmg.com"), Map.entry("bcg","https://bcg.com"));
+
+    private List<PaperclipAnalysisResult.Company> pcEnrichCompanies(List<PaperclipRawExtraction.RawCompany> list) {
+        if (list == null) return List.of();
+        return list.stream().map(c -> PaperclipAnalysisResult.Company.builder()
+                .name(c.getName()).website(pcWebsite(c.getName()))
+                .linkedin(pcCompanyLinkedIn(c.getName())).build()).collect(Collectors.toList());
+    }
+
+    private String pcWebsite(String name) {
+        if (name == null) return null;
+        for (var e : PC_SITES.entrySet()) if (name.toLowerCase().contains(e.getKey())) return e.getValue();
+        try {
+            String r = aiService.webSearch("Official website for: " + name + ". Return URL only.");
+            if (r != null && r.startsWith("http") && !r.contains("linkedin")) return r.trim();
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private String pcCompanyLinkedIn(String name) {
+        if (name == null) return null;
+        try {
+            String r = aiService.webSearch("LinkedIn company page for: " + name + ". Return URL only.");
+            if (r != null && r.contains("linkedin.com/company/")) return r.trim();
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private List<PaperclipAnalysisResult.Report> pcEnrichReports(List<String> titles) {
+        if (titles == null) return List.of();
+        return titles.stream().map(t -> PaperclipAnalysisResult.Report.builder()
+                .title(t).source(pcSource(t)).downloadUrl(pcReportUrl(t))
+                .build()).collect(Collectors.toList());
+    }
+
+    private String pcReportUrl(String title) {
+        if (title == null) return null;
+        try {
+            String r = aiService.webSearch("Download PDF URL for report: " + title + ". Return URL only.");
+            if (r != null && r.startsWith("http")) return r.trim();
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private String pcSource(String t) {
+        if (t == null) return "Research";
+        String l = t.toLowerCase();
+        if (l.contains("gartner"))  return "Gartner";
+        if (l.contains("mckinsey")) return "McKinsey";
+        if (l.contains("deloitte")) return "Deloitte";
+        if (l.contains("pwc"))      return "PwC";
+        if (l.contains("kpmg"))     return "KPMG";
+        if (l.contains("who"))      return "WHO";
+        if (l.contains("bcg"))      return "BCG";
+        if (l.contains("forrester"))return "Forrester";
+        if (l.contains("ibm"))      return "IBM";
+        return "Research";
+    }
+
+    private PaperclipAnalysisResult.Summary pcBuildSummary(PaperclipRawExtraction.RawSummary raw) {
+        if (raw == null) return PaperclipAnalysisResult.Summary.builder()
+                .shortSummary("").detailedSummary("").keyPoints(List.of()).actionItems(List.of()).build();
+        return PaperclipAnalysisResult.Summary.builder()
+                .shortSummary(raw.getShortSummary()).detailedSummary(raw.getDetailedSummary())
+                .keyPoints(raw.getKeyPoints() != null ? raw.getKeyPoints() : List.of())
+                .actionItems(raw.getActionItems() != null ? raw.getActionItems() : List.of()).build();
+    }
+
+    private String pcToJson(Object obj) {
+        try { return objectMapper.writeValueAsString(obj); } catch (Exception e) { return "{}"; }
+    }
+
+
     private String cleanJson(String s) {
         return s.replaceAll("```json", "").replaceAll("```", "").trim();
     }
+
+    public List<PaperclipResponse> getAllPaperclips() {
+
+        return paperclipRepository.findByS3FileUrlIsNotNull()  // ← only uploaded ones
+                .stream()
+                .map(item -> {
+                    try {
+                        PaperclipAnalysisResult analysis =
+                                objectMapper.readValue(
+                                        item.getAnalysisJson(),
+                                        PaperclipAnalysisResult.class
+                                );
+                        return PaperclipResponse.builder()
+                                .paperclipId(item.getPaperclipId())
+                                .fileName(item.getFileName())             // ← ADD
+                                .s3FileUrl(item.getS3FileUrl())           // ← ADD
+                                .uploadedAt(item.getCreatedAt().toString()) // ← ADD
+                                .analysis(analysis)
+                                .build();
+                    } catch (Exception ex) {
+                        log.error("Paperclip parse failed for {}", item.getPaperclipId(), ex);
+                        return null;  // ← skip broken records
+                    }
+                })
+                .filter(java.util.Objects::nonNull)  // ← remove nulls
+                .toList();
+    }
+
+
 }

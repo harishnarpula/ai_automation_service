@@ -1,5 +1,8 @@
 package com.askoxy.emailautomation.service;
 
+
+import com.askoxy.emailautomation.entity.PaperclipItem;
+import com.askoxy.emailautomation.repository.PaperclipRepository;
 import com.askoxy.emailautomation.dto.*;
 import com.askoxy.emailautomation.entity.VideoContent;
 import com.askoxy.emailautomation.enums.ContentStatus;
@@ -10,7 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-
+import com.askoxy.emailautomation.dto.PaperclipAnalysisResult;
 import java.io.InputStream;
 import java.net.URL;
 import java.util.*;
@@ -31,6 +34,7 @@ public class VideoService {
     private final VideoContentRepository videoContentRepository;
     private final ObjectMapper           objectMapper;
     private final ContentItemRepository  contentItemRepository;
+    private final PaperclipRepository    paperclipRepository;
     private final S3Service              s3Service;
 
     // Files are stored in S3 bucket 'radha-clone' under prefix 'videos/'
@@ -93,7 +97,30 @@ public class VideoService {
             item.setStatus(ContentStatus.APPROVED);
             return contentItemRepository.save(item);
 
+        } else if ("PAPERCLIP".equalsIgnoreCase(req.getEntityType())) {
+
+            PaperclipItem pc = paperclipRepository.findByPaperclipId(req.getEntityId())
+                    .orElseThrow(() -> new RuntimeException("Paperclip not found: " + req.getEntityId()));
+
+            PaperclipAnalysisResult analysis;
+            try { analysis = objectMapper.readValue(pc.getAnalysisJson(), PaperclipAnalysisResult.class); }
+            catch (Exception ex) { throw new RuntimeException("Failed to parse paperclip"); }
+
+            String text = (req.getEditedContent() != null && !req.getEditedContent().isBlank())
+                    ? req.getEditedContent()
+                    : (analysis.getSummary() != null ? analysis.getSummary().getDetailedSummary() : pc.getExtractedText());
+
+            ingestionService.storeContent(pc.getPaperclipId(), text, "PAPERCLIP");
+            pc.setAddedToClone(true);
+            paperclipRepository.save(pc);
+            return pc;
         } else {
+
+            /*
+             * =========================================================
+             * VIDEO FLOW
+             * =========================================================
+             */
 
             VideoContent content = videoContentRepository.findByVideoId(req.getEntityId())
                     .orElseThrow(() -> new RuntimeException("Video not found: " + req.getEntityId()));
@@ -159,106 +186,310 @@ public class VideoService {
     }
 
     @Transactional
-    public BlogFormatDto formatForBlog(String entityId, String entityType, boolean generateImage) {
+    public BlogFormatDto formatForBlog(
+            String entityId,
+            String entityType,
+            boolean generateImage) {
 
         String contentText;
-        String imageUrl;
+        String imageUrl = null;
         String storagePath = null;
+
         String blogTitle   = "";
         String blogBody    = "";
         String blogClosing = "";
         String blogSummary = "";
 
-        if ("CONTENT".equalsIgnoreCase(entityType)) {
-            ContentItem item = contentItemRepository.findByContentId(entityId)
-                    .orElseThrow(() -> new RuntimeException("Content not found: " + entityId));
-            contentText = item.getEditedContent() != null ? item.getEditedContent() : item.getGeneratedContent();
-            imageUrl    = item.getImageUrl();
+        /*
+         * =========================================================
+         * CONTENT FLOW
+         * =========================================================
+         */
 
-        } else {
-            VideoContent content = find(entityId);
-            contentText = content.getApprovedContent() != null ? content.getApprovedContent() : content.getReasonedContent();
-            imageUrl    = content.getThumbnailUrl();
-            storagePath = content.getStoragePath();
-            blogTitle   = content.getTitle()   != null ? content.getTitle()   : "";
-            blogBody    = content.getBody()     != null ? content.getBody()    : "";
-            blogClosing = content.getClosing()  != null ? content.getClosing() : "";
-            blogSummary = content.getSummary()  != null ? content.getSummary() : "";
+        if ("CONTENT".equalsIgnoreCase(entityType)) {
+
+            ContentItem item = contentItemRepository.findByContentId(entityId)
+                    .orElseThrow(() ->
+                            new RuntimeException("Content not found: " + entityId));
+
+            contentText =
+                    item.getEditedContent() != null
+                            ? item.getEditedContent()
+                            : item.getGeneratedContent();
+
+            /*
+             * CONTENT RULES
+             *
+             * generateImage = true
+             *      -> return image
+             *
+             * generateImage = false
+             *      -> no image
+             */
 
             if (generateImage) {
-                generateImageForContent(entityId, contentText, content);
-                content     = find(entityId);
-                imageUrl    = content.getThumbnailUrl();
-                storagePath = content.getStoragePath();
+
+                // Generate image only if not already present
+                if (item.getImageUrl() == null
+                        || item.getImageUrl().isBlank()) {
+
+                    String imagePrompt =
+                            aiService.buildImagePrompt(
+                                    contentText,
+                                    """
+                                    Create a highly professional,
+                                    cinematic,
+                                    modern blog thumbnail.
+    
+                                    Requirements:
+                                    - Strong visual storytelling
+                                    - Relevant to article topic
+                                    - Modern business / AI / startup style
+                                    - Clean composition
+                                    - Vibrant but professional colors
+                                    - Ultra realistic
+                                    - No watermarks
+                                    - No text inside image
+                                    - Social media quality
+                                    - High engagement thumbnail
+                                    - 16:9 aspect ratio
+                                    - Premium blog cover style
+                                    - Relevant to content meaning
+                                    - Eye-catching visual
+                                    """);
+
+                    String s3Key =
+                            aiService.generateImage(
+                                    imagePrompt);
+
+                    item.setImageUrl(s3Key);
+
+                    contentItemRepository.save(item);
+                }
+
+                imageUrl =
+                        item.getImageUrl() != null
+                                ? s3Service.resolveUrl(
+                                item.getImageUrl())
+                                : null;
+
+            } else {
+
+                // CONTENT WITHOUT IMAGE
+                imageUrl = null;
+            }
+
+        } else if ("PAPERCLIP".equalsIgnoreCase(entityType)) {
+
+            PaperclipItem pc = paperclipRepository.findByPaperclipId(entityId)
+                    .orElseThrow(() -> new RuntimeException("Paperclip not found: " + entityId));
+            try {
+                PaperclipAnalysisResult analysis = objectMapper.readValue(pc.getAnalysisJson(), PaperclipAnalysisResult.class);
+                contentText  = analysis.getSummary() != null ? analysis.getSummary().getDetailedSummary() : pc.getExtractedText();
+                blogTitle    = analysis.getSummary() != null ? analysis.getSummary().getShortSummary()     : "";
+                blogSummary  = contentText;
+                blogBody     = "";
+                blogClosing  = "";
+            } catch (Exception ex) { contentText = pc.getExtractedText(); blogTitle = ""; blogSummary = ""; blogBody = ""; blogClosing = ""; }
+
+            if (generateImage) {
+                if (pc.getImageUrl() == null || pc.getImageUrl().isBlank()) {
+                    String s3Key = aiService.generateImage(aiService.buildImagePrompt(contentText,
+                            "Professional blog thumbnail, modern business style, no text, 16:9"));
+                    pc.setImageUrl(s3Key);          // ✅ already saves to entity
+                    paperclipRepository.save(pc);   // ✅ already persists to DB
+                }
+                imageUrl = pc.getImageUrl() != null ? s3Service.resolveUrl(pc.getImageUrl()) : null;
+            } else {
+                // generateImage=false → reuse any previously generated image from DB
+                if (pc.getS3FileUrl() != null
+                        && !pc.getS3FileUrl().isBlank()) {
+
+                    String firstKey =
+                            pc.getS3FileUrl()
+                                    .split(",")[0]
+                                    .trim();
+
+                    imageUrl =
+                            s3Service.resolveUrl(firstKey);
+
+                } else {
+
+                    imageUrl = null;
+                }                   // ✅ was always null before — now restores saved URL
+            }
+        } else {
+
+            /*
+             * =========================================================
+             * VIDEO FLOW
+             * =========================================================
+             */
+
+            VideoContent content = find(entityId);
+
+            contentText =
+                    content.getApprovedContent() != null
+                            ? content.getApprovedContent()
+                            : content.getReasonedContent();
+
+            storagePath = content.getStoragePath();
+
+            blogTitle =
+                    content.getTitle() != null
+                            ? content.getTitle()
+                            : "";
+
+            blogBody =
+                    content.getBody() != null
+                            ? content.getBody()
+                            : "";
+
+            blogClosing =
+                    content.getClosing() != null
+                            ? content.getClosing()
+                            : "";
+
+            blogSummary =
+                    content.getSummary() != null
+                            ? content.getSummary()
+                            : "";
+
+            if (generateImage) {
+
+                /*
+                 * IMAGE POST MODE
+                 */
+
+                if (content.getThumbnailUrl() == null
+                        || content.getThumbnailUrl().isBlank()) {
+
+                    generateImageForContent(
+                            entityId,
+                            contentText,
+                            content);
+
+                    content = find(entityId);
+                }
+
+                imageUrl =
+                        content.getThumbnailUrl() != null
+                                ? s3Service.resolveUrl(
+                                content.getThumbnailUrl())
+                                : null;
+
+            } else {
+
+                /*
+                 * VIDEO POST MODE
+                 */
+
+                imageUrl = null;
             }
         }
 
-        String fullContext = "APPROVED CONTENT:\n" + contentText
-                + (blogTitle.isBlank()   ? "" : "\n\nTITLE: "   + blogTitle)
-                + (blogSummary.isBlank() ? "" : "\n\nSUMMARY: " + blogSummary)
-                + (blogBody.isBlank()    ? "" : "\n\nBODY: "    + blogBody)
-                + (blogClosing.isBlank() ? "" : "\n\nCLOSING: " + blogClosing);
+        String fullContext =
+                "APPROVED CONTENT:\n"
+                        + contentText
+                        + (blogTitle.isBlank()
+                        ? ""
+                        : "\n\nTITLE: " + blogTitle)
+                        + (blogSummary.isBlank()
+                        ? ""
+                        : "\n\nSUMMARY: " + blogSummary)
+                        + (blogBody.isBlank()
+                        ? ""
+                        : "\n\nBODY: " + blogBody)
+                        + (blogClosing.isBlank()
+                        ? ""
+                        : "\n\nCLOSING: " + blogClosing);
 
-        String videoFileUrl = generateImage ? null : resolveVideoFileUrl(storagePath);
+        /*
+         * VIDEO FILE RULE
+         *
+         * IMAGE MODE  -> no video
+         * VIDEO MODE  -> send video
+         */
+        String videoFileUrl =
+                generateImage
+                        ? null
+                        : resolveVideoFileUrl(storagePath);
 
         String rawJson = aiService.chat("""
-                You are an expert blog writer for AskOxy. Return ONLY valid JSON. No markdown outside the JSON values.
+            You are an expert blog writer for AskOxy. Return ONLY valid JSON. No markdown outside the JSON values.
 
-                BLOG WRITING RULES:
-                - Use the SOURCE CONTENT as input — extract key ideas and facts
-                - Write FRESH, ORIGINAL content — do NOT copy source text word-for-word
-                - Write naturally in first person as Radha Krishna Thatavarthi
-                                                                  - Only use phrases like:
-                                                                    "As Radha Sir"
-                                                                    "As CEO"
-                                                                    "As Founder"
-                                                                    if the source content explicitly mentions them
-                                                                  - Otherwise speak directly and naturally according to the content
-                                                                  - Do NOT overuse identity references
-                - SEO-friendly title (6-12 words, include main keyword)
-                - Start with an engaging introduction paragraph
-                - Write 2-3 main sections with bold headings using **Heading**
-                - Use bullet points where listing features or benefits
-                - End with a conclusion paragraph and clear call to action
-                - 600-1000 words
-                - Professional but warm, accessible tone
-                - NO hashtags anywhere
-                - Add META at the very end: META: [SEO description under 160 chars]
-                - Zero spelling or grammar mistakes
+            BLOG WRITING RULES:
+            - Use the SOURCE CONTENT as input — extract key ideas and facts
+            - Write FRESH, ORIGINAL content — do NOT copy source text word-for-word
+            - Write naturally in first person as Radha Krishna Thatavarthi
+            - SEO-friendly title (6-12 words, include main keyword)
+            - Start with an engaging introduction paragraph
+            - Write 2-3 main sections with bold headings using **Heading**
+            - Use bullet points where listing features or benefits
+            - End with a conclusion paragraph and clear call to action
+            - 600-1000 words
+            - Professional but warm, accessible tone
+            - NO hashtags anywhere
+            - Add META at the very end: META: [SEO description under 160 chars]
+            - Zero spelling or grammar mistakes
 
-                Source content:
-                %s
+            Source content:
+            %s
 
-                Return ONLY this JSON:
-                {
-                  "title": "<compelling blog title — 6-12 words, SEO-friendly>",
-                  "description": "<full blog post with **bold headings**, bullet points, conclusion, META line at end>",
-                  "socialMediaCaptions": "<2-3 sentences to share this blog. No hashtags.>"
-                }
-                """.formatted(fullContext));
+            Return ONLY this JSON:
+            {
+              "title": "<compelling blog title — 6-12 words, SEO-friendly>",
+              "description": "<full blog post with **bold headings**, bullet points, conclusion, META line at end>",
+              "socialMediaCaptions": "<2-3 sentences to share this blog. No hashtags.>"
+            }
+            """.formatted(fullContext));
 
         BlogFormatDto result;
+
         try {
-            String clean = rawJson.replaceAll("(?s)```json\\s*", "").replaceAll("(?s)```\\s*", "").trim();
+
+            String clean = rawJson
+                    .replaceAll("(?s)```json\\s*", "")
+                    .replaceAll("(?s)```\\s*", "")
+                    .trim();
+
             @SuppressWarnings("unchecked")
-            Map<String, String> parsed = objectMapper.readValue(clean, Map.class);
+            Map<String, String> parsed =
+                    objectMapper.readValue(clean, Map.class);
+
             result = BlogFormatDto.builder()
                     .entityId(entityId)
                     .entityType(entityType)
-                    .title(parsed.getOrDefault("title", "New Post by Radha"))
-                    .description(parsed.getOrDefault("description", contentText))
-                    .socialMediaCaptions(parsed.getOrDefault("socialMediaCaptions", ""))
+                    .generateImage(generateImage)
+                    .title(parsed.getOrDefault(
+                            "title",
+                            "New Post by Radha"))
+                    .description(parsed.getOrDefault(
+                            "description",
+                            contentText))
+                    .socialMediaCaptions(parsed.getOrDefault(
+                            "socialMediaCaptions",
+                            ""))
                     .addedBy("Radha")
                     .videoUrl(storagePath)
                     .videoFileUrl(videoFileUrl)
                     .imageUrl(imageUrl)
-                    .status(imageUrl != null ? "IMAGE_READY" : "DRAFT")
+                    .status(imageUrl != null
+                            ? "IMAGE_READY"
+                            : "DRAFT")
                     .build();
+
         } catch (Exception ex) {
-            log.error("Blog AI parse failed for entityId={}", entityId, ex);
+
+            log.error(
+                    "Blog AI parse failed for entityId={}",
+                    entityId,
+                    ex);
+
             result = BlogFormatDto.builder()
                     .entityId(entityId)
                     .entityType(entityType)
+                    .generateImage(generateImage)
                     .title("New Post by Radha")
                     .description(contentText)
                     .socialMediaCaptions("")
@@ -266,23 +497,31 @@ public class VideoService {
                     .videoUrl(storagePath)
                     .videoFileUrl(videoFileUrl)
                     .imageUrl(imageUrl)
-                    .status(imageUrl != null ? "IMAGE_READY" : "DRAFT")
+                    .status(imageUrl != null
+                            ? "IMAGE_READY"
+                            : "DRAFT")
                     .build();
         }
+
+        /*
+         * SAVE BLOG FORMAT
+         */
 
         if ("CONTENT".equalsIgnoreCase(entityType)) {
             ContentItem item = contentItemRepository.findByContentId(entityId).orElseThrow();
             try { item.setBlogFormat(objectMapper.writeValueAsString(result)); } catch (Exception ignored) {}
             contentItemRepository.save(item);
+        } else if ("PAPERCLIP".equalsIgnoreCase(entityType)) {
+            PaperclipItem pc = paperclipRepository.findByPaperclipId(entityId).orElseThrow();
+            try { pc.setBlogFormat(objectMapper.writeValueAsString(result)); } catch (Exception ignored) {}
+            paperclipRepository.save(pc);
         } else {
             VideoContent content = find(entityId);
             try { content.setBlogFormat(objectMapper.writeValueAsString(result)); } catch (Exception ignored) {}
             videoContentRepository.save(content);
         }
-
         return result;
     }
-
     @Transactional
     public BlogFormatDto generateBlogImage(String entityId, String entityType) {
 
@@ -313,6 +552,7 @@ public class VideoService {
                 BlogFormatDto result = BlogFormatDto.builder()
                         .entityId(entityId)
                         .entityType("CONTENT")
+                        .generateImage(true)
                         .imageUrl(presignedImageUrl)
                         .addedBy("Radha")
                         .status("IMAGE_READY")
@@ -331,6 +571,30 @@ public class VideoService {
                 throw new RuntimeException("Image generation failed");
             }
 
+        } else if ("PAPERCLIP".equalsIgnoreCase(entityType)) {
+
+            PaperclipItem pc = paperclipRepository.findByPaperclipId(entityId)
+                    .orElseThrow(() -> new RuntimeException("Paperclip not found: " + entityId));
+            try {
+                PaperclipAnalysisResult analysis = objectMapper.readValue(pc.getAnalysisJson(), PaperclipAnalysisResult.class);
+                contentText = analysis.getSummary() != null ? analysis.getSummary().getDetailedSummary() : pc.getExtractedText();
+            } catch (Exception ex) { contentText = pc.getExtractedText(); }
+
+            try {
+                String s3Key = aiService.generateImage(aiService.buildImagePrompt(contentText, "BLOG"));
+                pc.setImageUrl(s3Key);
+                String presignedUrl = s3Service.resolveUrl(s3Key);
+                BlogFormatDto result = BlogFormatDto.builder()
+                        .entityId(entityId).entityType("PAPERCLIP")
+                        .generateImage(true)
+                        .imageUrl(presignedUrl).addedBy("Radha").status("IMAGE_READY").build();
+                try { pc.setBlogFormat(objectMapper.writeValueAsString(result)); } catch (Exception ignored) {}
+                paperclipRepository.save(pc);
+                return result;
+            } catch (Exception ex) {
+                log.error("Paperclip image generation failed", ex);
+                throw new RuntimeException("Image generation failed");
+            }
         } else {
 
             VideoContent content = find(entityId);
@@ -346,6 +610,7 @@ public class VideoService {
 
             BlogFormatDto result = BlogFormatDto.builder()
                     .entityId(entityId)
+                    .generateImage(true)
                     .entityType("VIDEO")
                     .imageUrl(s3Service.resolveUrl(s3ImageKey))
                     .videoUrl(storagePath)
@@ -372,6 +637,9 @@ public class VideoService {
         String videoFileUrlToUse;
         if ("CONTENT".equalsIgnoreCase(blogResult.getEntityType())) {
             videoFileUrlToUse = blogResult.getVideoFileUrl() != null ? blogResult.getVideoFileUrl() : "";
+
+        } else if ("PAPERCLIP".equalsIgnoreCase(blogResult.getEntityType())) {
+            videoFileUrlToUse = "";
         } else {
             VideoContent content = find(blogResult.getEntityId());
             videoFileUrlToUse =
@@ -401,6 +669,12 @@ public class VideoService {
             try { item.setBlogFormat(objectMapper.writeValueAsString(blogResult)); } catch (Exception ignored) {}
             contentItemRepository.save(item);
 
+        } else if ("PAPERCLIP".equalsIgnoreCase(blogResult.getEntityType())) {
+            PaperclipItem pc = paperclipRepository.findByPaperclipId(blogResult.getEntityId())
+                    .orElseThrow(() -> new RuntimeException("Paperclip not found: " + blogResult.getEntityId()));
+            pc.setBlogPublished(true);
+            try { pc.setBlogFormat(objectMapper.writeValueAsString(blogResult)); } catch (Exception ignored) {}
+            paperclipRepository.save(pc);
         } else {
             VideoContent content = find(blogResult.getEntityId());
             content.setBlogPostId(blogResult.getBlogPostId());
@@ -416,46 +690,22 @@ public class VideoService {
     private String generateAndUploadImageToS3(String contentText)
             throws Exception {
 
-        // Step 1: AI generates image
         String imagePrompt =
                 aiService.buildImagePrompt(
                         contentText,
                         "BLOG"
                 );
 
-        String generatedImageUrl =
-                aiService.generateImage(
-                        imagePrompt
-                );
-
-        // Step 2: Download generated image
-        URL url =
-                new URL(generatedImageUrl);
-
-        byte[] imageBytes;
-
-        try (InputStream is =
-                     url.openStream()) {
-
-            imageBytes =
-                    is.readAllBytes();
-        }
-
-        // Step 3: Upload to S3
-        String s3Key =
-                "images/"
-                        + UUID.randomUUID()
-                        + ".png";
-
-        return s3Service.uploadBytes(
-                imageBytes,
-                s3Key,
-                "image/png"
-        );
+        // AIService already uploads image to S3
+        // and returns the S3 key
+        return aiService.generateImage(imagePrompt);
     }
 
     public List<VideoContent> getAll() { return videoContentRepository.findAll(); }
 
+    public List<VideoContent> getApproved() {
+        return videoContentRepository.findByStatus(ContentStatus.APPROVED);
+    }
     private String generateImageForContent(
             String id,
             String contentText,
@@ -524,4 +774,9 @@ public class VideoService {
             content.setStatus(ContentStatus.APPROVED);
         }
     }
+
+    public List<VideoContent> getUploaded() {
+        return videoContentRepository.findByStatusNot(ContentStatus.FAILED);
+    }
+
 }

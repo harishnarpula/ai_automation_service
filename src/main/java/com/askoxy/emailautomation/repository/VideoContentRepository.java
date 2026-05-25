@@ -12,4 +12,5 @@ public interface VideoContentRepository extends JpaRepository<VideoContent, Long
     Optional<VideoContent> findByVideoId(String videoId);
     List<VideoContent> findByStatus(ContentStatus status);
     List<VideoContent> findByAddedToCloneTrue();
+    List<VideoContent> findByStatusNot(ContentStatus status);
 }
