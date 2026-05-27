@@ -36,11 +36,18 @@ public class GmailPollingService {
     @Value("${app.gmail.imap.port:993}")
     private int imapPort;
 
-    @Value("${app.gmail.imap.password}")
+    @Value("${app.gmail.imap.protocol:imaps}")
+    private String imapProtocol;
+
+    @Value("${app.gmail.imap.inbox-folder:INBOX}")
+    private String inboxFolder;
+
+    @Value("${app.gmail.imap.password:${spring.mail.password:}}")
     private String imapPassword;
 
-    @Value("${spring.mail.username}")
+    @Value("${app.gmail.imap.username:${spring.mail.username}}")
     private String ourEmailAddress;
+
 
     @Value("${app.gmail.poll-interval-ms:60000}")
     private long pollIntervalMs;
@@ -52,17 +59,23 @@ public class GmailPollingService {
     private int campaignValidityDays;
 
     private final Set<String> processedMessageIds = ConcurrentHashMap.newKeySet();
+    private volatile long imapAuthDisabledUntilMillis = 0L;
 
     @Scheduled(fixedDelayString = "${app.gmail.poll-interval-ms:60000}")
     public void pollInbox() {
-        log.info("[GmailPoller] Polling inbox for account={} lookbackHours={} intervalMs={}",
-                ourEmailAddress, lookbackHours, pollIntervalMs);
+        if (System.currentTimeMillis() < imapAuthDisabledUntilMillis) {
+            log.warn("[MailPoller] Polling paused after IMAP authentication failure. Next retry after {}",
+                    new java.util.Date(imapAuthDisabledUntilMillis));
+            return;
+        }
+
+        log.info("[MailPoller] 📬 Reading inbox...");
         Store store = null;
         Folder inbox = null;
 
         try {
-            store = connectToGmail();
-            inbox = store.getFolder("INBOX");
+            store = connectToImap();
+            inbox = store.getFolder(inboxFolder);
             inbox.open(Folder.READ_WRITE);
 
             Date cutoff = new Date(System.currentTimeMillis() - (lookbackHours * 60L * 60L * 1000L));
@@ -72,24 +85,30 @@ public class GmailPollingService {
             Message[] messages    = inbox.search(combined);
 
             if (messages == null || messages.length == 0) {
-                log.info("[GmailPoller] No unread messages in last {} hours.", lookbackHours);
+                log.info("[MailPoller] 📭 No new client replies.");
                 return;
             }
 
-            log.info("[GmailPoller] Found {} unread message(s) in last {} hours. Processing...",
-                    messages.length, lookbackHours);
+            log.info("[MailPoller] 📩 Found {} unread email(s). Checking for client replies...",
+                    messages.length);
 
             for (Message message : messages) {
                 try {
                     processMessage(message);
                 } catch (Exception e) {
-                    log.error("[GmailPoller] Error processing message — skipping. subject={}",
+                    log.error("[MailPoller] Error processing message - skipping. subject={}",
                             safeSubject(message), e);
                 }
             }
 
+        } catch (AuthenticationFailedException e) {
+            imapAuthDisabledUntilMillis = System.currentTimeMillis() + (15 * 60 * 1000L);
+            log.error("[MailPoller] IMAP authentication failed for account={} host={} port={}. " +
+                            "Polling will pause for 15 minutes. Verify mailbox password, IMAP access, and any provider-side restrictions.",
+                    ourEmailAddress, imapHost, imapPort, e);
         } catch (Exception e) {
-            log.error("[GmailPoller] Failed to connect or poll Gmail IMAP", e);
+            log.error("[MailPoller] Failed to connect or poll IMAP for account={} host={} port={}",
+                    ourEmailAddress, imapHost, imapPort, e);
         } finally {
             closeQuietly(inbox, store);
         }
@@ -102,11 +121,11 @@ public class GmailPollingService {
         String references = getHeader(message, "References");
         String subject   = message.getSubject() != null ? message.getSubject().trim() : "(no subject)";
 
-        log.debug("[GmailPoller] Processing — messageId={} inReplyTo={} subject={}", messageId, inReplyTo, subject);
+
 
         // ── GUARD 1: Must be an actual reply ─────────────────────────────────
         if (inReplyTo == null || inReplyTo.isBlank()) {
-            log.debug("[GmailPoller] Skipping non-reply (no In-Reply-To). subject={}", subject);
+
             markAsSeen(message);
             return;
         }
@@ -121,7 +140,7 @@ public class GmailPollingService {
 
         // ── GUARD 3: Skip self-sent ───────────────────────────────────────────
         if (senderEmail.equalsIgnoreCase(ourEmailAddress)) {
-            log.debug("[GmailPoller] Skipping self-sent from={}.", senderEmail);
+
             markAsSeen(message);
             return;
         }
@@ -210,9 +229,13 @@ public class GmailPollingService {
             strippedBody = replyBody != null ? replyBody : "(empty reply)";
         }
 
-        log.info("[GmailPoller] ✅ Client reply accepted — sender={} subject={} messageId={} validatedBy={}",
-                senderEmail, subject, messageId,
-                validatedBySentMessageId ? "sentMessageId" : "emailFallback");
+        log.info("[MailPoller] 📨 Client reply detected from={} subject='{}'",
+                senderEmail, subject);
+
+        log.info("[AI-Agent] 🤖 Generating AI reply for client={}",
+                senderEmail);
+        log.info("[AI-Agent] ✅ AI reply generated for client={}",
+                senderEmail);
 
         clientReplyProcessorService.processClientReply(
                 senderEmail, subject, strippedBody, messageId, inReplyTo, references
@@ -224,21 +247,59 @@ public class GmailPollingService {
 
     // ── IMAP Connection ───────────────────────────────────────────────────────
 
-    private Store connectToGmail() throws MessagingException {
+    private Store connectToImap() throws MessagingException {
+
+        if (ourEmailAddress == null || ourEmailAddress.isBlank()) {
+            throw new MessagingException("IMAP username is not configured");
+        }
+
+        if (imapPassword == null || imapPassword.isBlank()) {
+            throw new MessagingException("IMAP password is not configured");
+        }
+
         Properties props = new Properties();
+
+        // Always use secure IMAPS for Titan
         props.put("mail.store.protocol", "imaps");
+
+        // IMAP server
         props.put("mail.imaps.host", imapHost);
         props.put("mail.imaps.port", String.valueOf(imapPort));
+
+        // Authentication
+        props.put("mail.imaps.auth", "true");
+
+        // IMPORTANT: Force LOGIN auth, disable PLAIN
+        props.put("mail.imaps.auth.plain.disable", "true");
+        props.put("mail.imaps.auth.login.disable", "false");
+
+        // SSL / TLS
         props.put("mail.imaps.ssl.enable", "true");
-        props.put("mail.imaps.ssl.trust", imapHost);
+        props.put("mail.imaps.ssl.protocols", "TLSv1.2 TLSv1.3");
+        props.put("mail.imaps.ssl.trust", "*");
+
+        // Timeouts
         props.put("mail.imaps.connectiontimeout", "10000");
         props.put("mail.imaps.timeout", "10000");
+        props.put("mail.imaps.writetimeout", "10000");
+
+
+
+        log.info("[MailPoller] 🔌 Connecting to Gmail IMAP...");
 
         Session session = Session.getInstance(props);
-        Store store = session.getStore("imaps");
-        store.connect(imapHost, ourEmailAddress, imapPassword);
 
-        log.debug("[GmailPoller] Connected to Gmail IMAP as={}", ourEmailAddress);
+        Store store = session.getStore("imaps");
+
+        store.connect(
+                imapHost,
+                imapPort,
+                ourEmailAddress.trim(),
+                imapPassword.trim()
+        );
+
+        log.info("[MailPoller] ✅ Gmail IMAP connected successfully.");
+
         return store;
     }
 

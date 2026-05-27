@@ -11,36 +11,20 @@ import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
-/**
- * Handles all outbound email delivery.
- *
- * Two modes:
- *
- *  1. SINGLE-SENDER (existing CLIENT_REPLY / old CAMPAIGN flow)
- *     send(toEmail, emailDto, inReplyTo, references)
- *     → uses the default injected JavaMailSender (spring.mail.*)
- *
- *  2. MULTI-SENDER (new BULK_CAMPAIGN flow)
- *     send(mailSender, fromEmail, fromName, toEmail, emailDto)
- *     → uses the caller-supplied JavaMailSender (one per company account)
- *
- * The UUID-based Message-ID fix is applied in both modes.
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EmailDeliveryService {
 
-    /** Default single sender — used for CLIENT_REPLY and legacy CAMPAIGN sessions */
     private final JavaMailSender mailSender;
 
-    @Value("${spring.mail.username}")
-    private String defaultFromEmail;
+    @Value("${app.email.from-address:${spring.mail.username}}")
+    private String defaultFromAddress;
 
-    @Value("${app.email.from-name}")
+    @Value("${app.email.from-name:AskOxy Team}")
     private String defaultFromName;
 
-    // ── Mode 1: Single-sender (existing flow — unchanged) ─────────────────────
+    // ── Mode 1: Single-sender ─────────────────────────────────────────────────
 
     public String send(String toEmail, GeneratedEmailDto email) {
         return send(toEmail, email, null, null);
@@ -49,24 +33,14 @@ public class EmailDeliveryService {
     public String send(String toEmail, GeneratedEmailDto email,
                        String inReplyTo, String references) {
         return sendInternal(
-                mailSender, defaultFromEmail, defaultFromName,
+                mailSender, defaultFromAddress, defaultFromName,
                 toEmail, email.getSubject(), email.getBody(),
                 inReplyTo, references
         );
     }
 
-    // ── Mode 2: Multi-sender (new BULK_CAMPAIGN flow) ─────────────────────────
+    // ── Mode 2: Multi-sender ──────────────────────────────────────────────────
 
-    /**
-     * Sends email using a specific JavaMailSender (one of the 6 company accounts).
-     *
-     * @param sender    The JavaMailSender to use (from MultiSenderConfig)
-     * @param fromEmail The sender's email address (for the From header)
-     * @param fromName  The sender's display name (for the From header)
-     * @param toEmail   Recipient email
-     * @param email     Subject + body DTO
-     * @return          The Gmail Message-ID of the sent email
-     */
     public String send(JavaMailSender sender,
                        String fromEmail,
                        String fromName,
@@ -105,31 +79,28 @@ public class EmailDeliveryService {
                 message.setHeader("References", references.trim());
             }
 
-            // ── UUID-based Message-ID fix ──────────────────────────────────────
-            // Generate a proper RFC-compliant Message-ID BEFORE saveChanges()
-            // so we always get a real ID (not @LAPTOP-xxx from local hostname).
+            // UUID-based Message-ID — no @LAPTOP leak
             String domain = fromEmail.contains("@")
                     ? fromEmail.substring(fromEmail.indexOf('@') + 1)
-                    : "mail.oxyglobal.com";
-
+                    : "oxyglobal.ai";
             String customMessageId = "<" + UUID.randomUUID() + "@" + domain + ">";
             message.setHeader("Message-ID", customMessageId);
             message.saveChanges();
 
             sender.send(message);
 
-            // Re-read after saveChanges to get the final committed value
             String sentMessageId = message.getMessageID();
             if (sentMessageId == null || sentMessageId.isBlank()) {
                 sentMessageId = customMessageId;
             }
 
-            log.info("[EmailDelivery] Sent → to={} from={} messageId={} inReplyTo={}",
+            log.info("[EmailDelivery] ✅ Sent → to={} from={} messageId={} inReplyTo={}",
                     toEmail, fromEmail, sentMessageId, inReplyTo);
 
             return sentMessageId;
 
         } catch (Exception ex) {
+            log.error("[EmailDelivery] ❌ Failed → to={} from={}", toEmail, fromEmail, ex);
             throw new RuntimeException(
                     "Failed to send email to " + toEmail + " from " + fromEmail, ex);
         }

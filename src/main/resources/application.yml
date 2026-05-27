@@ -57,23 +57,32 @@ spring:
     host: smtp.gmail.com
     port: 587
     username: venagantirishi@gmail.com
-    password:   ${GMAIL_APP_PASSWORD}
+    password: ${GMAIL_APP_PASSWORD}
+
     properties:
       mail:
         smtp:
           auth: true
           starttls:
             enable: true
+          connectiontimeout: 10000
+          timeout: 10000
+          writetimeout: 10000
 
 app:
   gmail:
     imap:
       host: imap.gmail.com
       port: 993
-      password: ${GMAIL_IMAP_PASSWORD}
+      protocol: imaps
+      username: venagantirishi@gmail.com
+      password: ${GMAIL_APP_PASSWORD}
+      inbox-folder: INBOX
+
     poll-interval-ms: 60000
     lookback-hours: 24
     campaign-validity-days: 7
+
   email:
     from-name: AskOxy Team
 
@@ -81,7 +90,7 @@ app:
   # GoDaddy SMTP: smtpout.secureserver.net : 587
   senders:
     - email: sales@oxyglobaltech.xyz
-      password: Test@1235
+      password: Test@12345
       name: OxyGlobal Sales
 
     - email: marketing@oxyglobaltech.info
