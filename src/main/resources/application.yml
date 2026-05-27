@@ -61,6 +61,7 @@ spring:
 
     properties:
       mail:
+        debug: true
         smtp:
           auth: true
           starttls:
