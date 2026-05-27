@@ -496,37 +496,199 @@ public class ContentService {
     // ═══════════════════════════════════════════════════
 
     private static final String PAPERCLIP_SYSTEM = """
-        You are a professional document intelligence AI.
-        Analyze the provided document(s) and return ONLY valid JSON. No explanation, no markdown.
+You are an elite enterprise document intelligence AI designed for:
 
-        JSON SCHEMA:
-        {
-          "summary": {
-            "shortSummary": "1-2 sentence summary",
-            "detailedSummary": "Comprehensive summary",
-            "keyPoints": ["point 1"],
-            "actionItems": ["action 1"]
-          },
-          "people": [
-            { "name": "Full Name", "designation": "Job Title", "company": "Company" }
-          ],
-          "companies": [
-            { "name": "Company Name" }
-          ],
-          "mentionedReports": ["Exact report title as mentioned"]
-        }
+- CEO briefings
+- Enterprise intelligence
+- Strategic business analysis
+- Compliance analysis
+- Banking intelligence
+- AI transformation analysis
+- Research extraction
+- GCC intelligence
+- Executive reporting
+- OCR document understanding
+- News intelligence
+- Financial analysis
+- Regulatory intelligence
+- Enterprise transformation reporting
 
-            RULES:
-            - People: founders, speakers, executives, investors, authors.
-            - Companies: startups, vendors, partners, investors, organizations.
-            - Reports: ANY mention of Gartner, McKinsey, Deloitte, WHO, annual reports,
-              research papers, ESG reports, surveys, studies.
-            - ONLY include facts explicitly visible in the source content
-            - Do NOT infer announcements or investments
-            - Do NOT use external knowledge
-            - Do NOT invent statistics
-            - If information is unclear, omit it
-        """;
+You may receive:
+- Newspapers
+- Magazine scans
+- OCR screenshots
+- PDFs
+- Research reports
+- Banking reports
+- Compliance documents
+- AI reports
+- Healthcare articles
+- Startup news
+- Government notices
+- Annual reports
+- ESG reports
+- Financial filings
+- Audit reports
+- Interviews
+- Press releases
+- Business documents
+- Enterprise transformation articles
+- Research papers
+- Whitepapers
+- Investor presentations
+- Regulatory filings
+
+OCR text may contain:
+- spelling mistakes
+- OCR corruption
+- broken formatting
+- duplicate words
+- incomplete sentences
+
+You must intelligently understand the REAL business meaning.
+
+Return ONLY valid JSON.
+No markdown.
+No explanation.
+No extra text.
+
+JSON SCHEMA:
+{
+  "sourceType": "newspaper | magazine | filing | report | research | press_release | interview | article",
+
+  "industry": "Banking | AI | FinTech | Healthcare | Education | Technology | Government | Consulting | Startup | General",
+
+  "summary": {
+
+    "shortSummary": "Write 1-2 executive-level sentences summarizing the most important business insight, transformation, announcement, event, or strategic development from the document.",
+
+    "detailedSummary": "Write a highly detailed executive-level narrative summary that completely captures the document’s strategic, operational, technological, financial, compliance, research, and business insights.
+
+            Generate EXACTLY 6-8 intelligent and connected FULL sentences.
+            
+                                             IMPORTANT:
+                                             The detailedSummary MUST contain MINIMUM 6 complete sentences.
+                                             If fewer than 6 sentences are generated,
+                                             internally regenerate before returning final JSON.
+STRICT RULES:
+- The summary must feel like a premium CEO intelligence briefing
+- Use executive-level business English
+- Make the output sound similar to McKinsey/Gartner/BCG analysis
+- Every sentence must contribute NEW information
+- Avoid repeated wording
+- Avoid robotic AI phrases
+- Never hallucinate facts or statistics
+- Final output must be enterprise-grade and executive-ready",
+
+    "keyPoints": [
+      "Generate 5-10 important business, compliance, operational, strategic, technical, or industry insights."
+    ],
+
+    "actionItems": [
+      "Generate 3-7 strategic executive recommendations or next steps."
+    ]
+  },
+
+  "people": [
+    {
+      "name": "Full Name",
+      "designation": "Official Job Title",
+      "company": "Organization Name"
+    }
+  ],
+
+  "companies": [
+    {
+      "name": "Company/Organization Name"
+    }
+  ],
+
+ "reports": [
+               {
+                 "title": "Enterprise-grade report/program/workflow name",
+                 "source": "Organization or regulator name",
+                 "downloadUrl": "Official URL if confidently available"
+               }
+             ]
+}
+
+RULES:
+- ONLY include facts explicitly visible in the document
+- NEVER hallucinate statistics, investments, or claims
+- NEVER invent people or companies
+- NEVER use external knowledge
+- Skip uncertain or low-confidence information
+
+REPORT INTELLIGENCE RULES:
+
+You must intelligently detect enterprise reports,
+regulatory programs, transformation initiatives,
+AI systems, compliance workflows, governance frameworks,
+operational modernization programs, cloud migration initiatives,
+research programs, and strategic enterprise capabilities
+even when they are not written as formal report titles.
+
+If the document describes:
+- compliance automation
+- AI governance
+- AML/KYC workflows
+- SAR filing systems
+- FinCEN reporting
+- cloud migration
+- enterprise transformation
+- GCC modernization
+- AI platforms
+- operational frameworks
+- banking modernization
+- digital transformation programs
+- regulatory systems
+- risk systems
+- governance initiatives
+
+then create concise enterprise-grade report/program names
+based on the business context.
+
+Examples:
+
+Input Context:
+"LLM tools accelerated SAR filing to FinCEN"
+
+Output:
+{
+  "title": "LLM-Based SAR Compliance Automation System",
+  "source": "Citizens Bank",
+  "downloadUrl": null
+}
+
+Input Context:
+"All applications migrated to cloud"
+
+Output:
+{
+  "title": "Enterprise Cloud Migration Transformation Program",
+  "source": "Citizens Bank",
+  "downloadUrl": null
+}
+
+Input Context:
+"GCC became AI-led transformation hub"
+
+Output:
+{
+  "title": "AI-Led GCC Transformation Initiative",
+  "source": "Cognizant",
+  "downloadUrl": null
+}
+
+IMPORTANT:
+- Think like an enterprise analyst
+- Think like Gartner/McKinsey/Deloitte
+- Infer enterprise programs from context
+- Create professional enterprise-grade titles
+- Never hallucinate fake companies
+- Never invent fake URLs
+- If no URL exists confidently, return null
+""";
 
     public PaperclipResponse analyzePaperclip(List<MultipartFile> files) {
         if (files == null || files.isEmpty()) throw new RuntimeException("Upload at least one file.");
@@ -630,7 +792,7 @@ public class ContentService {
         CompletableFuture<List<PaperclipAnalysisResult.Company>> cf =
                 CompletableFuture.supplyAsync(() -> pcEnrichCompanies(r.getCompanies()));
         CompletableFuture<List<PaperclipAnalysisResult.Report>>  rf =
-                CompletableFuture.supplyAsync(() -> pcEnrichReports(r.getMentionedReports()));
+                CompletableFuture.supplyAsync(() -> pcEnrichReports(r.getReports()));
 
         PaperclipAnalysisResult result = PaperclipAnalysisResult.builder()
                 .summary(pcBuildSummary(r.getSummary()))
@@ -708,8 +870,18 @@ public class ContentService {
                                 )
                                 .matcher(result);
 
-                if (matcher.find())
-                    return matcher.group();
+                if (matcher.find()) {
+
+                    String url = matcher.group();
+
+                    if (url.contains("123456")
+                            || url.contains("example")
+                            || url.contains("sample")
+                            || url.matches(".*\\d{6,}.*"))
+                        return null;
+
+                    return url;
+                }
             }
 
         } catch (Exception ex) {
@@ -776,44 +948,179 @@ public class ContentService {
         } catch (Exception ignored) {}
         return null;
     }
-
     private String pcCompanyLinkedIn(String name) {
-        if (name == null) return null;
+
+        if (name == null)
+            return null;
+
         try {
-            String r = aiService.webSearch("LinkedIn company page for: " + name + ". Return URL only.");
-            if (r != null && r.contains("linkedin.com/company/")) return r.trim();
+
+            String r = aiService.webSearch("""
+        Find official LinkedIn company page URL for:
+
+        %s
+
+        Return ONLY URL.
+        If unavailable return NONE.
+        """.formatted(name));
+
+            if (r == null)
+                return null;
+
+            java.util.regex.Matcher matcher =
+                    java.util.regex.Pattern
+                            .compile(
+                                    "https://([a-z]{2,3}\\.)?linkedin\\.com/company/[A-Za-z0-9\\-_%]+",
+                                    java.util.regex.Pattern.CASE_INSENSITIVE
+                            )
+                            .matcher(r);
+
+            if (matcher.find())
+                return matcher.group();
+
         } catch (Exception ignored) {}
+
         return null;
     }
 
-    private List<PaperclipAnalysisResult.Report> pcEnrichReports(List<String> titles) {
-        if (titles == null) return List.of();
-        return titles.stream().map(t -> PaperclipAnalysisResult.Report.builder()
-                .title(t).source(pcSource(t)).downloadUrl(pcReportUrl(t))
-                .build()).collect(Collectors.toList());
+    private List<PaperclipAnalysisResult.Report>
+    pcEnrichReports(
+            List<PaperclipRawExtraction.RawReport> reports
+    ) {
+
+        if (reports == null)
+            return List.of();
+
+        return reports.stream()
+                .map(r ->
+                        PaperclipAnalysisResult.Report.builder()
+                                .title(r.getTitle())
+                                .source(
+                                        r.getSource() != null
+                                                ? r.getSource()
+                                                : pcSource(r.getTitle())
+                                )
+                                .downloadUrl(
+                                        r.getDownloadUrl() != null
+                                                ? r.getDownloadUrl()
+                                                : pcReportUrl(r.getTitle())
+                                )
+                                .build()
+                )
+                .collect(Collectors.toList());
     }
 
     private String pcReportUrl(String title) {
-        if (title == null) return null;
+
+        if (title == null || title.isBlank())
+            return null;
+
         try {
-            String r = aiService.webSearch("Download PDF URL for report: " + title + ". Return URL only.");
-            if (r != null && r.startsWith("http")) return r.trim();
-        } catch (Exception ignored) {}
+
+            String result = aiService.webSearch("""
+        Find OFFICIAL report/article/PDF URL for:
+
+        %s
+
+        RULES:
+        - Prefer official publisher URLs
+        - Prefer direct PDF links
+        - Prefer government/regulatory URLs
+        - Return ONLY URL
+        - Return NONE if unavailable
+        - Never guess
+        """.formatted(title));
+
+            if (result == null)
+                return null;
+
+            result = result.trim();
+
+            if (!result.startsWith("http"))
+                return null;
+
+            return result;
+
+        } catch (Exception ex) {
+
+            log.warn("Report URL search failed: {}", title);
+        }
+
         return null;
     }
-
     private String pcSource(String t) {
-        if (t == null) return "Research";
+
+        if (t == null)
+            return "Research";
+
         String l = t.toLowerCase();
-        if (l.contains("gartner"))  return "Gartner";
-        if (l.contains("mckinsey")) return "McKinsey";
-        if (l.contains("deloitte")) return "Deloitte";
-        if (l.contains("pwc"))      return "PwC";
-        if (l.contains("kpmg"))     return "KPMG";
-        if (l.contains("who"))      return "WHO";
-        if (l.contains("bcg"))      return "BCG";
-        if (l.contains("forrester"))return "Forrester";
-        if (l.contains("ibm"))      return "IBM";
+
+        // REGULATORY
+        if (l.contains("sar")
+                || l.contains("suspicious activity"))
+            return "Regulatory Filing";
+
+        if (l.contains("ctr"))
+            return "Regulatory Filing";
+
+        if (l.contains("aml"))
+            return "Compliance Report";
+
+        if (l.contains("kyc"))
+            return "Compliance Report";
+
+        if (l.contains("fincen"))
+            return "Regulatory Filing";
+
+        if (l.contains("rbi"))
+            return "Regulatory Filing";
+
+        if (l.contains("sebi"))
+            return "Regulatory Filing";
+
+        if (l.contains("audit"))
+            return "Audit Report";
+
+        if (l.contains("annual report"))
+            return "Annual Report";
+
+        if (l.contains("earnings"))
+            return "Earnings Report";
+
+        if (l.contains("esg"))
+            return "ESG Report";
+
+        // CONSULTING
+        if (l.contains("gartner"))
+            return "Gartner";
+
+        if (l.contains("mckinsey"))
+            return "McKinsey";
+
+        if (l.contains("deloitte"))
+            return "Deloitte";
+
+        if (l.contains("bcg"))
+            return "BCG";
+
+        if (l.contains("bain"))
+            return "Bain";
+
+        if (l.contains("forrester"))
+            return "Forrester";
+
+        if (l.contains("pwc"))
+            return "PwC";
+
+        if (l.contains("kpmg"))
+            return "KPMG";
+
+        if (l.contains("ey"))
+            return "EY";
+
+        if (l.contains("ibm"))
+            return "IBM";
+
         return "Research";
     }
 
