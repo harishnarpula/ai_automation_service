@@ -54,19 +54,24 @@ spring:
 
   mail:
     host: smtp.gmail.com
-    port: 465
+    port: ${SPRING_MAIL_PORT}
     username: venagantirishi@gmail.com
     password: ${GMAIL_APP_PASSWORD}
 
     properties:
       mail:
+        debug: true
+
         smtp:
           auth: true
-          ssl:
+
+          starttls:
             enable: true
-          connectiontimeout: 10000
-          timeout: 10000
-          writetimeout: 10000
+            required: true
+
+          connectiontimeout: 30000
+          timeout: 30000
+          writetimeout: 30000
 
 app:
   gmail:
@@ -127,6 +132,8 @@ useronboard:
     collection-name: ${spring.ai.vectorstore.qdrant.collection-name}
     use-tls: ${spring.ai.vectorstore.qdrant.use-tls}
 
+
+
 radhaclone:
   mail:
     host: smtp.gmail.com
@@ -163,9 +170,15 @@ management:
 logging:
   level:
     root: INFO
+
     com.askoxy.emailautomation.service.GmailPollingService: DEBUG
     com.askoxy.emailautomation.service.ClientReplyProcessorService: DEBUG
+
     org.springframework.scheduling: INFO
+
+    org.springframework.mail: DEBUG
+    org.eclipse.angus.mail: DEBUG
+
   file:
     name: logs/mail-automation.log
 
