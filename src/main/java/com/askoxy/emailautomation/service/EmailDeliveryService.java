@@ -100,9 +100,27 @@ public class EmailDeliveryService {
             return sentMessageId;
 
         } catch (Exception ex) {
-            log.error("[EmailDelivery] ❌ Failed → to={} from={}", toEmail, fromEmail, ex);
+
+            log.error("""
+            [EmailDelivery] ❌ SMTP FAILED
+            to={}
+            from={}
+            exception={}
+            message={}
+            cause={}
+            """,
+                    toEmail,
+                    fromEmail,
+                    ex.getClass().getName(),
+                    ex.getMessage(),
+                    ex.getCause() != null ? ex.getCause().getMessage() : "null",
+                    ex
+            );
+
             throw new RuntimeException(
-                    "Failed to send email to " + toEmail + " from " + fromEmail, ex);
+                    "SMTP failure: " + ex.getMessage(),
+                    ex
+            );
         }
     }
 }
