@@ -86,8 +86,7 @@ public class S3Service {
 
         URL url = s3Client.generatePresignedUrl(request);
 
-        return URLDecoder.decode(url.toString(), StandardCharsets.UTF_8);
-    }
+        return url.toString();    }
 
     public String resolveUrl(String s3KeyOrUrl) {
         if (s3KeyOrUrl == null || s3KeyOrUrl.isBlank())

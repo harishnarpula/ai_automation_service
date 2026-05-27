@@ -207,8 +207,12 @@ public class ContentService {
             if (name.endsWith(".png") || name.endsWith(".jpg")
                     || name.endsWith(".jpeg") || name.endsWith(".webp")) {
                 String filename = UUID.randomUUID() + "_" + req.getAttachment().getOriginalFilename();
-                String s3Key    = s3Service.uploadFile(req.getAttachment(), "images/" + filename);
-                imageUrl        = s3Service.generatePresignedUrl(s3Key);
+                String s3Key = s3Service.uploadFile(
+                        req.getAttachment(),
+                        "images/" + filename
+                );
+
+                imageUrl = s3Key;
                 log.info("Image uploaded to S3: key={}", s3Key);
             }
         }
@@ -648,7 +652,12 @@ public class ContentService {
 
         log.info("Paperclip saved: {}", item.getPaperclipId());
         return PaperclipResponse.builder()
-                .paperclipId(item.getPaperclipId()).analysis(result).build();
+                .paperclipId(item.getPaperclipId())
+                .fileName(item.getFileName())
+                .s3FileUrl(item.getS3FileUrl())
+                .uploadedAt(item.getCreatedAt() != null ? item.getCreatedAt().toString() : null)
+                .analysis(result)
+                .build();
     }
 
     public PaperclipResponse getPaperclip(String paperclipId) {

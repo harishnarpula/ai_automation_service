@@ -1,21 +1,23 @@
 package com.askoxy.emailautomation.controller;
 
+import com.askoxy.emailautomation.service.SocialMediaService;
 import com.askoxy.emailautomation.service.ContentFormatterService;
 import com.askoxy.emailautomation.dto.*;
 import com.askoxy.emailautomation.entity.ContentItem;
+import com.askoxy.emailautomation.entity.PaperclipItem;
 import com.askoxy.emailautomation.entity.VideoContent;
 import com.askoxy.emailautomation.enums.PlatformType;
 import com.askoxy.emailautomation.service.ContentService;
 import com.askoxy.emailautomation.service.IngestionService;
 import com.askoxy.emailautomation.service.VideoService;
+import com.askoxy.emailautomation.repository.PaperclipRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import java.util.Map;
 import java.util.List;
-import com.askoxy.emailautomation.entity.PaperclipItem;
-import com.askoxy.emailautomation.repository.PaperclipRepository;
+import java.util.Map;
+
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1")
@@ -26,6 +28,7 @@ public class ContentController {
     private final ContentFormatterService formatterService;
     private final VideoService videoService;
     private final PaperclipRepository paperclipRepository;
+    private final SocialMediaService socialMediaService;
 
     // ── COMPANY UPLOAD ────────────────────────────────────────────────────────
 
@@ -82,16 +85,12 @@ public class ContentController {
     public ApiResponse<?> getApprovedContent(
             @RequestParam(required = false) String entityType) {
 
-        if ("VIDEO".equalsIgnoreCase(entityType)) {
+        if ("VIDEO".equalsIgnoreCase(entityType))
             return ApiResponse.success(videoService.getApproved());
-        }
-        if ("PAPERCLIP".equalsIgnoreCase(entityType)) {
+        if ("PAPERCLIP".equalsIgnoreCase(entityType))
             return ApiResponse.success(contentService.getApprovedPaperclips());
-        }
-        if ("CONTENT".equalsIgnoreCase(entityType)) {
+        if ("CONTENT".equalsIgnoreCase(entityType))
             return ApiResponse.success(contentService.getApproved());
-        }
-        // no entityType → return all three combined
         return ApiResponse.success(contentService.getAllApproved());
     }
 
@@ -100,32 +99,56 @@ public class ContentController {
         return ApiResponse.success(contentService.getByContentId(contentId));
     }
 
-    // ── FORMAT — handles both VIDEO and CONTENT ───────────────────────────────
+    // ── FORMAT — VIDEO | CONTENT | PAPERCLIP ─────────────────────────────────
+    //
+    //  Flow:  approve  →  POST /social/format  →  POST /social/publish
+    //
+    //  Entity   media sent to n8n
+    //  ───────  ─────────────────────────────────────────────
+    //  VIDEO    videoUrl (storagePath) + imageUrl (thumbnail)
+    //  CONTENT  imageUrl
+    //  PAPERCLIP paperclipUrl (s3FileUrl)
 
-    @PostMapping("social/format")
+    @PostMapping("/social/format")
     public ApiResponse<FormatDto> format(@RequestBody FormatDto request) {
 
         String content;
-        String imageUrl = null;
-        String videoUrl = null;
+        String imageUrl     = null;
+        String videoUrl     = null;
+        String paperclipUrl = null;
 
         if ("VIDEO".equalsIgnoreCase(request.getEntityType())) {
             VideoContent video = videoService.findById(request.getEntityId());
-            content  = video.getApprovedContent() != null ? video.getApprovedContent() : video.getReasonedContent();
-            imageUrl = video.getThumbnailUrl();
-            videoUrl = video.getStoragePath();
+            content     = video.getApprovedContent() != null
+                    ? video.getApprovedContent()
+                    : video.getReasonedContent();
+            imageUrl    = video.getThumbnailUrl();
+            videoUrl    = video.getStoragePath();
+
+        } else if ("PAPERCLIP".equalsIgnoreCase(request.getEntityType())) {
+            PaperclipItem clip = paperclipRepository
+                    .findByPaperclipId(request.getEntityId())
+                    .orElseThrow(() -> new RuntimeException(
+                            "Paperclip not found: " + request.getEntityId()));
+            content      = clip.getExtractedText();
+            paperclipUrl = clip.getS3FileUrl();
+
         } else {
+            // CONTENT (default)
             ContentItem item = contentService.getByContentId(request.getEntityId());
-            content  = item.getEditedContent() != null ? item.getEditedContent() : item.getGeneratedContent();
+            content  = item.getEditedContent() != null
+                    ? item.getEditedContent()
+                    : item.getGeneratedContent();
             imageUrl = item.getImageUrl();
         }
 
-        FormatDto formattedResult = formatterService.format(content, imageUrl, videoUrl, request.getPlatforms());
-        formattedResult.setEntityId(request.getEntityId());
-        formattedResult.setEntityType(request.getEntityType());
-        formattedResult.setPlatforms(request.getPlatforms());
-        formattedResult.setFormats(formattedResult.getFormattedContent());
-        return ApiResponse.success(formattedResult);
+        FormatDto result = formatterService.format(
+                content, imageUrl, videoUrl, paperclipUrl, request.getPlatforms());
+
+        result.setEntityId(request.getEntityId());
+        result.setEntityType(request.getEntityType());
+        result.setPlatforms(request.getPlatforms());
+        return ApiResponse.success(result);
     }
 
     // ── VIDEO SUBMIT ──────────────────────────────────────────────────────────
@@ -145,17 +168,11 @@ public class ContentController {
         return ApiResponse.success(videoService.getUploaded());
     }
 
-    // ── SHARED ACTIONS (video + content both use these) ───────────────────────
+    // ── SHARED ACTIONS ────────────────────────────────────────────────────────
 
     @PostMapping("/add-to-clone")
     public ApiResponse<Object> addToClone(@RequestBody CloneApprovalRequest request) {
         return ApiResponse.success(videoService.addToClone(request));
-    }
-
-    @PostMapping("/social/post")
-    public ApiResponse<SocialPostDto> postToSocial(
-            @RequestBody SocialPostDto request) {
-        return ApiResponse.success(videoService.postToSocial(request));
     }
 
     // ── BLOG ──────────────────────────────────────────────────────────────────
@@ -175,16 +192,32 @@ public class ContentController {
     public ApiResponse<BlogFormatDto> generateImage(
             @PathVariable String id,
             @RequestParam String entityType) {
-
-        return ApiResponse.success(
-                videoService.generateBlogImage(id, entityType)
-        );
+        return ApiResponse.success(videoService.generateBlogImage(id, entityType));
     }
 
     @PostMapping("/blog/publish")
     public ApiResponse<BlogFormatDto> publishBlog(@RequestBody BlogFormatDto blogResult) {
         return ApiResponse.success(videoService.publishBlog(blogResult));
     }
+
+    // ── SOCIAL PUBLISH ────────────────────────────────────────────────────────
+    // Single publish endpoint for VIDEO, CONTENT, and PAPERCLIP.
+    // Send the formattedContent map returned by /social/format as approvedBodies.
+
+
+    @PostMapping("/social/publish")
+    public ApiResponse<Map<String, String>> publishToSocial(
+            @RequestBody FormatDto request) {
+
+        Map<String, String> results =
+                socialMediaService.postToAllPlatforms(
+                        request.getFormattedContent()
+                );
+
+        return ApiResponse.success(results);
+    }
+
+    // ── PAPERCLIP ─────────────────────────────────────────────────────────────
 
     @PostMapping(value = "/paperclip/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<PaperclipResponse> analyzePaperclip(
@@ -194,8 +227,6 @@ public class ContentController {
 
     @GetMapping("/paperclip/all")
     public ApiResponse<List<PaperclipResponse>> getAllPaperclips() {
-
         return ApiResponse.success(contentService.getAllPaperclips());
-
     }
 }

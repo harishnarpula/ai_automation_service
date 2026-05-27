@@ -29,7 +29,37 @@ public class BlogService {
             headers.set("accept", "*/*");
 
             List<Map<String, Object>> imagesList = new ArrayList<>();
+            if (imageUrl != null &&
+                    imageUrl.contains(".amazonaws.com/")) {
+
+                String cleanPath =
+                        imageUrl.substring(
+                                imageUrl.indexOf(".com/") + 4
+                        );
+
+                cleanPath =
+                        cleanPath.contains("?")
+                                ? cleanPath.substring(
+                                0,
+                                cleanPath.indexOf("?")
+                        )
+                                : cleanPath;
+
+                if (!cleanPath.startsWith("/images/")) {
+
+                    cleanPath =
+                            "/images/" +
+                                    cleanPath.replaceFirst("^/+", "");
+                }
+
+                imageUrl =
+                        cleanPath.startsWith("/images/")
+                                ? cleanPath
+                                : "/images/" +
+                                cleanPath.replaceFirst("^/+", "");            }
+
             imagesList.add(Map.of(
+                    "imageId", java.util.UUID.randomUUID().toString(),
                     "imageUrl", imageUrl != null ? imageUrl : "",
                     "status", true
             ));
@@ -41,7 +71,7 @@ public class BlogService {
                         "campaignType",        title,
                         "socialMediaCaption",  title,
                         "campaignTypeAddBy",   "RADHA",
-                        "images",              imagesList,
+                        "images", imagesList,
                         "videoUrl",            videoUrl,
                         "campainInputType",    "BLOG"
                 );
@@ -51,7 +81,7 @@ public class BlogService {
                         "campaignType",        title,
                         "socialMediaCaption",  title,
                         "campaignTypeAddBy",   "RADHA",
-                        "images",              imagesList,
+                        "images", imagesList,
                         "campainInputType",    "BLOG"
                 );
             }

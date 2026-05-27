@@ -246,34 +246,52 @@ If text is unclear, still try best OCR extraction.
     }
 
     public String buildImagePrompt(String generatedContent, String platformLabel) {
-        String system = """
-You are an expert image prompt writer.
 
-Rules:
-- corporate modern design
-- premium business look
-- social media quality
-- no text
-- no letters
-- no watermark
-- clean composition
-- return only prompt
+        String system = """
+You are an expert AI image prompt engineer.
+
+Your job is to create ultra-realistic image prompts that VISUALLY REPRESENT the exact meaning of the content.
+
+IMPORTANT RULES:
+- The image must strongly relate to the article/topic
+- Anyone seeing the image should immediately understand the content topic
+- Create realistic visual storytelling
+- Use scenes, people, objects, environments, symbols, and actions related to the topic
+- Avoid generic business stock-photo visuals
+- Avoid random abstract AI art
+- Focus on the actual meaning of the content
+- Professional editorial/news/blog cover style
+- Cinematic realistic quality
+- Emotionally and contextually accurate
+- Highly detailed
+- Premium magazine-style composition
+- Modern realistic lighting
+- No watermark
+- No unrelated objects
+- No distorted faces
+- No random text
+- Generate visually meaningful images
+- Return ONLY the final image generation prompt
 """;
 
         String user = """
-                Platform: %s
+Platform:
+%s
 
-                Content:
-                %s
+CONTENT:
+%s
 
-                Create a DALL-E prompt.
-                """.formatted(
-                platformLabel,
-                (generatedContent != null
-                        ? generatedContent.substring(
-                        0,
-                        Math.min(generatedContent.length(), 500))
-                        : "")        );
+Generate an ultra-realistic image prompt that visually explains this content.
+The image must clearly represent the topic so users can understand the article just by seeing the image.
+"""
+                .formatted(
+                        platformLabel,
+                        (generatedContent != null
+                                ? generatedContent.substring(
+                                0,
+                                Math.min(generatedContent.length(), 2000))
+                                : "")
+                );
 
         return chat(system, user);
     }

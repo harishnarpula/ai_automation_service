@@ -24,10 +24,12 @@ public class PlatformContent {
     private String subject;
 
     // hashtags separated
-    private String hashtags; // platform specific hashtags
-    // media
-    private String imageUrl;
-    private String videoUrl;
+    private String hashtags;
+
+    // media — only ONE of these will be non-null per entity type
+    private String imageUrl;      // CONTENT entity
+    private String videoUrl;      // VIDEO entity
+    private String paperclipUrl;  // PAPERCLIP entity (S3 file URL)
 
     // metadata
     private Integer charCount;
@@ -35,8 +37,7 @@ public class PlatformContent {
 
     // AI + workflow metadata
     private String contentType; // BLOG / VIDEO / SOCIAL / EMAIL
-
-    private String tone; // PROFESSIONAL / CASUAL / SALES
+    private String tone;        // PROFESSIONAL / CASUAL / SALES
 
     private Map<String, Object> extra;
 }

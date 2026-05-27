@@ -22,6 +22,9 @@ public class SocialMediaService {
     @Value("${radha.n8n.webhook-base-url:http://localhost:5678/webhook-test}")
     private String n8nWebhookBaseUrl;
 
+    @Value("${radha.n8n.enabled:false}")
+    private boolean n8nEnabled;
+
     // ─────────────────────────────────────────────────────────────
     // FORMAT CONTENT FOR PLATFORMS
     // ─────────────────────────────────────────────────────────────
@@ -47,9 +50,7 @@ public class SocialMediaService {
                 );
 
                 String hashtags = extractHashtags(formattedText);
-
                 String cleanText = removeHashtags(formattedText);
-
                 String limitLabel = getLimitLabel(upperPlatform);
 
                 PlatformContent pc = PlatformContent.builder()
@@ -70,15 +71,14 @@ public class SocialMediaService {
 
                 log.error("Formatting failed for {} : {}", platform, ex.getMessage());
 
-                PlatformContent failed = PlatformContent.builder()
-                        .platform(platform.toUpperCase())
-                        .text("FORMATTING_FAILED")
-                        .hashtags("")
-                        .charCount(0)
-                        .limit("N/A")
-                        .build();
-
-                results.put(platform.toUpperCase(), failed);
+                results.put(platform.toUpperCase(),
+                        PlatformContent.builder()
+                                .platform(platform.toUpperCase())
+                                .text("FORMATTING_FAILED")
+                                .hashtags("")
+                                .charCount(0)
+                                .limit("N/A")
+                                .build());
             }
         }
 
@@ -96,7 +96,6 @@ public class SocialMediaService {
             case "LINKEDIN" -> """
                     Platform: LinkedIn
                     - Professional warm tone
-                    - Use maximum useful content length naturally
                     - Strong hook first line
                     - Storytelling style
                     - Readable paragraphs
@@ -108,7 +107,6 @@ public class SocialMediaService {
             case "INSTAGRAM" -> """
                     Platform: Instagram
                     - Casual energetic tone
-                    - Highly engaging
                     - Use emojis naturally
                     - Add CTA
                     - Add hashtags at end
@@ -129,8 +127,7 @@ public class SocialMediaService {
             case "TWITTER" -> """
                     Platform: Twitter/X
                     - STRICT 280 characters
-                    - Punchy and concise
-                    - Preserve key message only
+                    - Punchy concise style
                     - 1-2 hashtags maximum
                     Content:
                     """ + content;
@@ -139,7 +136,6 @@ public class SocialMediaService {
                     Platform: WhatsApp
                     - Personal conversational style
                     - Short and clear
-                    - Use *bold* where useful
                     - No hashtags
                     - Clear CTA
                     Content:
@@ -152,31 +148,48 @@ public class SocialMediaService {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // POST TO N8N
+    // PUBLISH TO ALL PLATFORMS
     // ─────────────────────────────────────────────────────────────
 
     public Map<String, String> postToAllPlatforms(
-            Map<String, PlatformContent> approvedContent
+            Map<String, PlatformContent> formattedContent
     ) {
 
         Map<String, String> results = new LinkedHashMap<>();
 
-        for (Map.Entry<String, PlatformContent> entry : approvedContent.entrySet()) {
+        // NULL SAFETY
+        if (formattedContent == null || formattedContent.isEmpty()) {
+
+            results.put("ERROR", "No formatted content provided");
+
+            return results;
+        }
+
+        for (Map.Entry<String, PlatformContent> entry
+                : formattedContent.entrySet()) {
 
             try {
 
                 PlatformContent pc = entry.getValue();
 
-                String result = fireN8n(pc);
+                if (pc == null) {
 
-                results.put(entry.getKey(), result);
+                    results.put(entry.getKey(),
+                            "FAILED: Platform content is null");
+
+                    continue;
+                }
+
+                results.put(entry.getKey(), fireN8n(pc));
 
             } catch (Exception ex) {
 
-                results.put(
+                log.error("Publish failed for {} : {}",
                         entry.getKey(),
-                        "FAILED: " + ex.getMessage()
-                );
+                        ex.getMessage());
+
+                results.put(entry.getKey(),
+                        "FAILED: " + ex.getMessage());
             }
         }
 
@@ -184,10 +197,18 @@ public class SocialMediaService {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // SEND TO N8N
+    // SEND TO N8N WEBHOOK
     // ─────────────────────────────────────────────────────────────
 
     private String fireN8n(PlatformContent pc) {
+
+        if (!n8nEnabled) {
+
+            log.info("n8n disabled — skipping publish for {}",
+                    pc.getPlatform());
+
+            return "N8N_DISABLED";
+        }
 
         try {
 
@@ -205,6 +226,7 @@ public class SocialMediaService {
             payload.put("hashtags", pc.getHashtags());
             payload.put("imageUrl", pc.getImageUrl());
             payload.put("videoUrl", pc.getVideoUrl());
+            payload.put("paperclipUrl", pc.getPaperclipUrl());
             payload.put("charCount", pc.getCharCount());
             payload.put("limit", pc.getLimit());
 
@@ -214,15 +236,15 @@ public class SocialMediaService {
                     String.class
             );
 
-            if (response.getStatusCode().is2xxSuccessful()) {
-                return "N8N_TRIGGERED";
-            }
-
-            return "N8N_ERROR";
+            return response.getStatusCode().is2xxSuccessful()
+                    ? "N8N_TRIGGERED"
+                    : "N8N_ERROR";
 
         } catch (Exception ex) {
 
-            log.error("n8n failed for {} : {}", pc.getPlatform(), ex.getMessage());
+            log.error("n8n failed for {} : {}",
+                    pc.getPlatform(),
+                    ex.getMessage());
 
             return "N8N_FAILED: " + ex.getMessage();
         }
@@ -269,6 +291,7 @@ public class SocialMediaService {
         for (String word : text.split("\\s+")) {
 
             if (word.startsWith("#")) {
+
                 sb.append(word).append(" ");
             }
         }
@@ -298,7 +321,10 @@ public class SocialMediaService {
 
         try {
 
-            return URLEncoder.encode(value, StandardCharsets.UTF_8);
+            return URLEncoder.encode(
+                    value,
+                    StandardCharsets.UTF_8
+            );
 
         } catch (Exception ex) {
 

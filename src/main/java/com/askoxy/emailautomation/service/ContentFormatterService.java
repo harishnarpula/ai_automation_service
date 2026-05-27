@@ -16,9 +16,18 @@ public class ContentFormatterService {
 
     private final AIService aiService;
 
+    /**
+     * Formats raw content for every requested platform.
+     * Pass the ONE media URL that applies for this entity:
+     *   - imageUrl      → CONTENT entity
+     *   - videoUrl      → VIDEO entity (imageUrl can carry the thumbnail)
+     *   - paperclipUrl  → PAPERCLIP entity
+     * Unused media params should be null.
+     */
     public FormatDto format(String rawContent,
                             String imageUrl,
                             String videoUrl,
+                            String paperclipUrl,
                             List<String> platforms) {
 
         Map<String, PlatformContent> formatted = new LinkedHashMap<>();
@@ -26,7 +35,8 @@ public class ContentFormatterService {
         for (String platform : platforms) {
             try {
                 PlatformContent pc = formatForPlatform(
-                        platform.toUpperCase(), rawContent, imageUrl);
+                        platform.toUpperCase(), rawContent,
+                        imageUrl, videoUrl, paperclipUrl);
                 formatted.put(platform.toUpperCase(), pc);
                 log.info("Formatted for {}", platform);
 
@@ -37,10 +47,17 @@ public class ContentFormatterService {
 
         return FormatDto.builder()
                 .formattedContent(formatted)
+                .formats(formatted)          // kept for backwards compatibility
                 .build();
     }
 
-    private PlatformContent formatForPlatform(String platform, String rawContent, String imageUrl) {
+    // ── internal ─────────────────────────────────────────────────────────────
+
+    private PlatformContent formatForPlatform(String platform,
+                                              String rawContent,
+                                              String imageUrl,
+                                              String videoUrl,
+                                              String paperclipUrl) {
 
         String systemPrompt = getSystemPrompt(platform);
         String userPrompt = """
@@ -53,7 +70,7 @@ public class ContentFormatterService {
                 """.formatted(rawContent, platform);
 
         String formatted = aiService.chat(systemPrompt, userPrompt);
-        return buildPlatformContent(platform, formatted, imageUrl);
+        return buildPlatformContent(platform, formatted, imageUrl, videoUrl, paperclipUrl);
     }
 
     private String getSystemPrompt(String platform) {
@@ -169,9 +186,11 @@ public class ContentFormatterService {
 
     private PlatformContent buildPlatformContent(String platform,
                                                  String formattedText,
-                                                 String imageUrl) {
-        String subject = null;
-        String title = null;
+                                                 String imageUrl,
+                                                 String videoUrl,
+                                                 String paperclipUrl) {
+        String subject  = null;
+        String title    = null;
         String hashtags = null;
 
         if (platform.equals("EMAIL") && formattedText.contains("SUBJECT:")) {
@@ -200,16 +219,6 @@ public class ContentFormatterService {
             hashtags = tags.toString().trim();
         }
 
-        int limit = switch (platform) {
-            case "LINKEDIN"  -> 3000;
-            case "FACEBOOK"  -> 63206;
-            case "INSTAGRAM" -> 2200;
-            case "WHATSAPP"  -> 4096;
-            case "BLOG"      -> 99999;
-            case "EMAIL"     -> 5000;
-            default          -> 5000;
-        };
-
         String limitLabel = switch (platform) {
             case "LINKEDIN"  -> "3000 chars max";
             case "INSTAGRAM" -> "2200 chars max";
@@ -226,6 +235,8 @@ public class ContentFormatterService {
                 .subject(subject)
                 .title(title)
                 .imageUrl(imageUrl)
+                .videoUrl(videoUrl)           // ← was silently dropped before
+                .paperclipUrl(paperclipUrl)   // ← new
                 .charCount(formattedText.length())
                 .limit(limitLabel)
                 .build();
