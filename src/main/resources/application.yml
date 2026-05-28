@@ -1,6 +1,6 @@
 spring:
   application:
-    name: askoxy-email-automation
+    name: ai-automation-service
 
   jmx:
     enabled: false
@@ -80,7 +80,7 @@ app:
       port: 993
       protocol: imaps
       username: venagantirishi@gmail.com
-      password: ${GMAIL_APP_PASSWORD}
+      password: ${GMAIL_IMAP_PASSWORD}
       inbox-folder: INBOX
 
     poll-interval-ms: 60000

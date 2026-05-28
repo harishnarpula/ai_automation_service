@@ -12,10 +12,10 @@
 	</parent>
 
 	<groupId>com.askoxy</groupId>
-	<artifactId>askoxy-email-automation</artifactId>
+	<artifactId>ai-automation-service</artifactId>
 	<version>1.0.0</version>
-	<name>askoxy-email-automation</name>
-	<description>AI Powered Email Automation System V1</description>
+	<name>ai-automation-service</name>
+	<description>AI Powered Automation System V1</description>
 
 	<properties>
 		<java.version>17</java.version>
