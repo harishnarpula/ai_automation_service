@@ -31,17 +31,29 @@ public class RealtimeTokenController {
         session.put("type", "realtime");
         session.put("model", "gpt-realtime");
 
-        // Optional voice
-        if (request.getVoice() != null &&
-                !request.getVoice().isBlank()) {
-            session.put("voice", request.getVoice());
-        }
-
-        // Optional instructions
         if (request.getInstructions() != null &&
                 !request.getInstructions().isBlank()) {
-            session.put("instructions",
-                    request.getInstructions());
+
+            session.put(
+                    "instructions",
+                    request.getInstructions()
+            );
+        }
+
+        // Correct voice format
+        if (request.getVoice() != null &&
+                !request.getVoice().isBlank()) {
+
+            session.put(
+                    "audio",
+                    Map.of(
+                            "output",
+                            Map.of(
+                                    "voice",
+                                    request.getVoice()
+                            )
+                    )
+            );
         }
 
         Map<String, Object> requestBody =
