@@ -34,7 +34,7 @@ public class ComplianceAgent {
                 Check and fix:
                 1. Reply must directly address the client's actual message (no generic template tone)
                 2. Remove ANY generic openers ("I hope", "I wanted to reach out", "I am writing to")
-                3. Replace ANY placeholder like [Your Name], [Position] with "Alex"
+                3. Replace ANY placeholder like [Your Name], [Position] with "OXYGLOBAL.TECH"
                 4. Kill buzzwords: innovative, cutting-edge, seamlessly, leverage, synergy, transform
                 5. Ensure body is under 150 words
                 6. Ensure the email clearly says what WE do and what WE can BUILD for the client
@@ -51,7 +51,7 @@ public class ComplianceAgent {
                 
                 Check and fix:
                 1. Remove ANY generic openers ("I hope", "I wanted to reach out", "I am writing to")
-                2. Replace ANY placeholder like [Your Name], [Position] with "Alex"
+                2. Replace ANY placeholder like [Your Name], [Position] with "OXYGLOBAL.TECH"
                 3. Kill buzzwords: innovative, cutting-edge, seamlessly, leverage, synergy, transform
                 4. Ensure body is under 150 words
                 5. Ensure the email clearly says what WE do and what WE can BUILD for the client

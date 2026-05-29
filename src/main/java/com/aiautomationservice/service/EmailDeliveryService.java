@@ -1,6 +1,7 @@
 package com.aiautomationservice.service;
 
 import com.aiautomationservice.dto.GeneratedEmailDto;
+import com.aiautomationservice.service.EmailTemplateService;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,11 +18,12 @@ import java.util.UUID;
 public class EmailDeliveryService {
 
     private final JavaMailSender mailSender;
+    private final EmailTemplateService emailTemplateService;  // ← NEW
 
     @Value("${app.email.from-address:${spring.mail.username}}")
     private String defaultFromAddress;
 
-    @Value("${app.email.from-name:AskOxy Team}")
+    @Value("${app.email.from-name:ASKOXY.AI TEAM}")
     private String defaultFromName;
 
     // ── Mode 1: Single-sender ─────────────────────────────────────────────────
@@ -64,13 +66,22 @@ public class EmailDeliveryService {
                                 String inReplyTo,
                                 String references) {
         try {
+            // Extract client first name from greeting line for template context
+            String clientName = extractClientName(body);
+
+            // Wrap plain-text AI body in branded HTML template
+            String htmlBody = emailTemplateService.wrapInTemplate(body, clientName);
+
             MimeMessage message = sender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
+            // true = multipart (needed for HTML)
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
             helper.setFrom(fromEmail, fromName);
             helper.setTo(toEmail);
             helper.setSubject(subject);
-            helper.setText(body, false);
+
+            // Send HTML version + plain text fallback
+            helper.setText(body, htmlBody);  // (plainText, htmlText)
 
             if (inReplyTo != null && !inReplyTo.isBlank()) {
                 message.setHeader("In-Reply-To", inReplyTo.trim());
@@ -94,21 +105,20 @@ public class EmailDeliveryService {
                 sentMessageId = customMessageId;
             }
 
-            log.info("[EmailDelivery] ✅ Sent → to={} from={} messageId={} inReplyTo={}",
+            log.info("[EmailDelivery] ✅ Sent HTML email → to={} from={} messageId={} inReplyTo={}",
                     toEmail, fromEmail, sentMessageId, inReplyTo);
 
             return sentMessageId;
 
         } catch (Exception ex) {
-
             log.error("""
-            [EmailDelivery] ❌ SMTP FAILED
-            to={}
-            from={}
-            exception={}
-            message={}
-            cause={}
-            """,
+                [EmailDelivery] ❌ SMTP FAILED
+                to={}
+                from={}
+                exception={}
+                message={}
+                cause={}
+                """,
                     toEmail,
                     fromEmail,
                     ex.getClass().getName(),
@@ -116,11 +126,27 @@ public class EmailDeliveryService {
                     ex.getCause() != null ? ex.getCause().getMessage() : "null",
                     ex
             );
-
-            throw new RuntimeException(
-                    "SMTP failure: " + ex.getMessage(),
-                    ex
-            );
+            throw new RuntimeException("SMTP failure: " + ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * Extracts the client's first name from the greeting line.
+     * e.g. "Hi Rishi," → "Rishi"
+     * Falls back to empty string if not found.
+     */
+    private String extractClientName(String body) {
+        if (body == null) return "";
+        String[] lines = body.split("\\n");
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.toLowerCase().startsWith("hi ")) {
+                return trimmed.substring(3).replaceAll("[,!].*", "").trim();
+            }
+            if (trimmed.toLowerCase().startsWith("dear ")) {
+                return trimmed.substring(5).replaceAll("[,!].*", "").trim();
+            }
+        }
+        return "";
     }
 }
