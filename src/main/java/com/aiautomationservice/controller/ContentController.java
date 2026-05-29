@@ -34,44 +34,24 @@ public class ContentController {
 
     // ── COMPANY UPLOAD ────────────────────────────────────────────────────────
 
-    @PostMapping(
-            value = "/upload/company",
-            consumes = MediaType.MULTIPART_FORM_DATA_VALUE
-    )
+    @PostMapping(value = "/upload/company", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<List<UploadResponse>> uploadCompanyKnowledge(
-
-            @RequestParam("file") MultipartFile[] files,
-
+            @RequestPart("file") MultipartFile[] files,
             @RequestParam PlatformType platformType,
-
-            @RequestParam(required = false) String description
-    ) {
+            @RequestParam(required = false) String description) {
 
         List<UploadResponse> responses = new ArrayList<>();
 
         for (MultipartFile file : files) {
-
-            // FILE SIZE VALIDATION
             if (file.getSize() > 500 * 1024 * 1024) {
-
                 throw new RuntimeException(
-                        "Company upload too large. Max allowed size is 500MB."
-                );
+                        "Company upload too large. Max allowed size is 500MB.");
             }
-
-            // PROCESS FILE
-            responses.add(
-                    ingestionService.upload(
-                            file,
-                            platformType,
-                            description
-                    )
-            );
+            responses.add(ingestionService.upload(file, platformType, description));
         }
 
         return ApiResponse.success(responses);
     }
-
 
 
     // ── CONTENT SUBMIT ────────────────────────────────────────────────────────

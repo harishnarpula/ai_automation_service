@@ -132,10 +132,13 @@ public class IngestionService {
             int totalChars = chunks.stream().mapToInt(DocumentChunk::getCharacterCount).sum();
             log.info("Upload complete: fileId={} chunks={}", fileId, chunks.size());
 
+            // FIXED ✅
             return UploadResponse.builder()
+                    .success(true)
                     .fileId(fileId)
                     .fileName(file.getOriginalFilename())
                     .chunksStored(chunks.size())
+                    .totalChunks(chunks.size())   // ← add this
                     .status("COMPLETED")
                     .totalCharacters(totalChars)
                     .build();

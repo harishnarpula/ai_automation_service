@@ -261,46 +261,19 @@ public class DocumentService {
                 return extractedText;
             }
 
-            log.info("Poor PDF text detected. Running OCR...");
-
-            PDFRenderer renderer =
-                    new PDFRenderer(document);
-
-            ITesseract tesseract =
-                    new Tesseract();
-
-            // WINDOWS TESSERACT PATH
-            tesseract.setDatapath(
-                    "C:\\Program Files\\Tesseract-OCR\\tessdata");
-
-            tesseract.setLanguage("eng");
-
-            StringBuilder finalText =
-                    new StringBuilder();
-
-            for (int page = 0;
-                 page < document.getNumberOfPages();
-                 page++) {
-
-                log.info("OCR Processing page {}",
-                        page + 1);
-
-                BufferedImage image =
-                        renderer.renderImageWithDPI(
-                                page,
-                                300);
-
-                String pageText =
-                        tesseract.doOCR(image);
-
-                finalText.append("\n\n")
-                        .append("--- PAGE ")
-                        .append(page + 1)
-                        .append(" ---\n")
-                        .append(pageText);
+            log.info("Poor PDF text detected. Falling back to GPT-4 Vision...");
+            try {
+                String visionText = aiService.extractImageText(file);
+                if (visionText != null && !visionText.isBlank()) {
+                    log.info("GPT-4 Vision OCR successful");
+                    return visionText;
+                }
+            } catch (Exception visionEx) {
+                log.warn("GPT-4 Vision fallback failed: {}", visionEx.getMessage());
             }
-
-            return finalText.toString();
+            return extractedText.isBlank()
+                    ? "[PDF text could not be extracted]"
+                    : extractedText;
 
         } catch (Exception e) {
 
