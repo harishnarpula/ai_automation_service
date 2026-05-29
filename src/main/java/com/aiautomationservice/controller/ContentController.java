@@ -15,6 +15,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -32,16 +34,45 @@ public class ContentController {
 
     // ── COMPANY UPLOAD ────────────────────────────────────────────────────────
 
-    @PostMapping(value = "/upload/company", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<UploadResponse> uploadCompanyKnowledge(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam PlatformType platformType,
-            @RequestParam(required = false) String description) {
+    @PostMapping(
+            value = "/upload/company",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
+    public ApiResponse<List<UploadResponse>> uploadCompanyKnowledge(
 
-        if (file.getSize() > 200 * 1024 * 1024)
-            throw new RuntimeException("Company upload too large. Max allowed size is 200MB.");
-        return ApiResponse.success(ingestionService.upload(file, platformType, description));
+            @RequestParam("file") MultipartFile[] files,
+
+            @RequestParam PlatformType platformType,
+
+            @RequestParam(required = false) String description
+    ) {
+
+        List<UploadResponse> responses = new ArrayList<>();
+
+        for (MultipartFile file : files) {
+
+            // FILE SIZE VALIDATION
+            if (file.getSize() > 500 * 1024 * 1024) {
+
+                throw new RuntimeException(
+                        "Company upload too large. Max allowed size is 500MB."
+                );
+            }
+
+            // PROCESS FILE
+            responses.add(
+                    ingestionService.upload(
+                            file,
+                            platformType,
+                            description
+                    )
+            );
+        }
+
+        return ApiResponse.success(responses);
     }
+
+
 
     // ── CONTENT SUBMIT ────────────────────────────────────────────────────────
 
@@ -58,8 +89,8 @@ public class ContentController {
                 && voiceFile == null && attachment == null)
             throw new RuntimeException("Please provide text, voice, or attachment.");
 
-        if (attachment != null && attachment.getSize() > 10 * 1024 * 1024)
-            throw new RuntimeException("Attachment too large. Max allowed size is 10MB.");
+        if (attachment != null && attachment.getSize() > 100 * 1024 * 1024)
+            throw new RuntimeException("Attachment too large. Max allowed size is 100MB.");
 
         return ApiResponse.success(
                 contentService.submit(

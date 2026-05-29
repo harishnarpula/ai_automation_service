@@ -275,7 +275,7 @@ public class ContentService {
                 .contentId(UUID.randomUUID().toString())
                 .rawInstruction(rawInstructionForStorage)
                 .extractedInputs(finalInstruction)
-                .platform(req.getPlatform())
+                .platform(req.getPlatform() != null ? req.getPlatform() : PlatformType.OTHER)
                 .customPlatformName(req.getCustomPlatformName())
                 .generatedContent(generatedJson)
                 .title(parsedTitle)
