@@ -45,6 +45,9 @@ spring:
         collection-name: askoxycollection
         initialize-schema: true
         use-tls: true
+    anthropic:
+      api-key: DISABLED
+
       # added — forces TLS on Railway
     connectiontimeout: 5000
     timeout: 5000
