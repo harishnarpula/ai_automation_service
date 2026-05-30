@@ -26,8 +26,8 @@ public class WhatsAppWebhookController {
             @RequestBody(required = false) String body
     ) {
 
-        log.info("=== WEBHOOK HIT ===");
-        log.info("RAW BODY: {}", body);
+//        log.info("=== WEBHOOK HIT ===");
+//        log.info("RAW BODY: {}", body);
 
         try {
 
@@ -40,11 +40,11 @@ public class WhatsAppWebhookController {
             String eventType =
                     root.path("event_type").asText();
 
-            log.info("Event Type: {}", eventType);
+//            log.info("Event Type: {}", eventType);
 
             // Process only received messages
             if (!"message_received".equals(eventType)) {
-                log.info("Ignored event: {}", eventType);
+//                log.info("Ignored event: {}", eventType);
                 return ResponseEntity.ok("ignored_event");
             }
 
@@ -54,10 +54,10 @@ public class WhatsAppWebhookController {
                     data.path("fromMe").asBoolean();
 
             // Ignore messages sent by your own WhatsApp
-            if (fromMe) {
-                log.info("Ignoring own message");
-                return ResponseEntity.ok("own_message");
-            }
+//            if (fromMe) {
+//                log.info("Ignoring own message");
+//                return ResponseEntity.ok("own_message");
+//            }
 
             String senderNumber =
                     data.path("from").asText();
@@ -79,10 +79,10 @@ public class WhatsAppWebhookController {
 
             if (!adminNormalized.equals(normalizedSender)) {
 
-                log.warn(
-                        "Unauthorized WhatsApp approval attempt from: {} (expected admin={})",
-                        normalizedSender, adminNormalized
-                );
+//                log.warn(
+//                        "Unauthorized WhatsApp approval attempt from: {} (expected admin={})",
+//                        normalizedSender, adminNormalized
+//                );
 
                 return ResponseEntity.ok("unauthorized");
             }

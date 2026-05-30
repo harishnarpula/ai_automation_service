@@ -53,29 +53,14 @@ spring:
     timeout: 5000
     writetimeout: 5000
 
-  mail:
-    host: smtp.gmail.com
-    port: 587
-    username: venagantirishi@gmail.com
-    password: bptd hnds uwxu smmv
-
-    properties:
-      mail:
-        debug: false
-
-        smtp:
-          auth: true
-
-          starttls:
-            enable: true
-            required: true
-
-          connectiontimeout: 30000
-          timeout: 30000
-          writetimeout: 30000
 
 app:
   gmail:
+    client-id: ${GMAIL_CLIENT_ID}
+    client-secret: ${GMAIL_CLIENT_SECRET}
+    refresh-token: ${GMAIL_REFRESH_TOKEN}
+    sender-address: ${GMAIL_SENDER_ADDRESS}
+    sender-name: ASKOXY.AI TEAM
     imap:
       host: imap.gmail.com
       port: 993
@@ -106,10 +91,10 @@ sanjana-ultramsg:
 
 useronboard:
   mail:
-    host: ${spring.mail.host}
+    host: smtp.gmail.com
     port: 587
-    username: ${spring.mail.username}
-    password: ${spring.mail.password}
+    username: siddushiva2699@gmail.com
+    password: upzw endy nhuu htag
   qdrant:
     host: ${spring.ai.vectorstore.qdrant.host}
     port: ${spring.ai.vectorstore.qdrant.port}
@@ -154,22 +139,7 @@ management:
     redis:
       enabled: false
 
-logging:
-  level:
-    root: INFO
 
-    com.aiautomationservice.service.GmailPollingService: INFO
-    com.aiautomationservice.service.ClientReplyProcessorService: INFO
-
-    org.springframework.scheduling: WARN
-
-    org.springframework.mail: WARN
-    org.eclipse.angus.mail: WARN
-    org.eclipse.angus.mail.imap: WARN
-    org.eclipse.angus.mail.imap.connectionpool: WARN
-
-  file:
-    name: logs/mail-automation.log
 
 aws:
   s3:

@@ -42,22 +42,22 @@ public class DebugRequestFilter implements Filter {
         CachedBodyHttpServletRequest cached = new CachedBodyHttpServletRequest(req);
 
         // Log EVERYTHING
-        log.info("======== INCOMING REQUEST ========");
-        log.info("METHOD : {}", req.getMethod());
-        log.info("URI    : {}", req.getRequestURI());
-        log.info("CONTENT-TYPE: {}", req.getContentType());
+//        log.info("======== INCOMING REQUEST ========");
+//        log.info("METHOD : {}", req.getMethod());
+//        log.info("URI    : {}", req.getRequestURI());
+//        log.info("CONTENT-TYPE: {}", req.getContentType());
 
         // Log all headers
         Enumeration<String> headerNames = req.getHeaderNames();
         while (headerNames != null && headerNames.hasMoreElements()) {
             String name = headerNames.nextElement();
-            log.info("HEADER : {} = {}", name, req.getHeader(name));
+//            log.info("HEADER : {} = {}", name, req.getHeader(name));
         }
 
         // Log body
         String body = cached.getBody();
-        log.info("BODY   : {}", body.isEmpty() ? "(empty)" : body);
-        log.info("==================================");
+//        log.info("BODY   : {}", body.isEmpty() ? "(empty)" : body);
+//        log.info("==================================");
 
         chain.doFilter(cached, res);
     }
